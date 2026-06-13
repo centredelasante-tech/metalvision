@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #f4f6f3;
+  --foreground: #0f1a0f;
+  --primary: #1a6b3c;
+  --primary-foreground: #ffffff;
+  --secondary: #e8f5ee;
+  --secondary-foreground: #1a6b3c;
+  --accent: #e8a020;
+  --accent-foreground: #ffffff;
+  --muted: #eef1ed;
+  --muted-foreground: #6b7a6b;
+  --card: #ffffff;
+  --card-foreground: #0f1a0f;
+  --border: #d6ddd6;
+  --input: #e8ede8;
+  --ring: #1a6b3c;
+  --radius: 10px;
+  --font-sans: var(--font-dm-sans), sans-serif;
+
+  --status-submitted: #e8a020;
+  --status-submitted-bg: #fef3dc;
+  --status-processed: #1a6b3c;
+  --status-processed-bg: #e8f5ee;
+  --status-invoiced: #2563eb;
+  --status-invoiced-bg: #eff6ff;
+  --status-paid: #059669;
+  --status-paid-bg: #ecfdf5;
+  --status-draft: #6b7280;
+  --status-draft-bg: #f3f4f6;
+  --status-sent: #7c3aed;
+  --status-sent-bg: #f5f3ff;
+
+  --metal-fer: #6b7280;
+  --metal-acier: #374151;
+  --metal-aluminium: #93c5fd;
+  --metal-cuivre: #f59e0b;
+  --metal-laiton: #d97706;
+  --metal-inox: #a1a1aa;
+
+  --sensor-ok: #1a6b3c;
+  --sensor-warning: #e8a020;
+  --sensor-critical: #dc2626;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  h1, h2, h3, h4, h5, h6, p {
+    margin: 0;
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  .text-hero-metric {
+    font-size: clamp(1.75rem, 3vw, 2.25rem);
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  .scan-frame-border {
+    border: 3px solid var(--primary);
+    border-radius: 12px;
+    box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.55);
+  }
+
+  .scan-line-animate {
+    animation: scan-line 2s ease-in-out infinite;
+  }
+
+  @keyframes scan-line {
+    0% { top: 8px; opacity: 1; }
+    50% { top: calc(100% - 8px); opacity: 0.6; }
+    100% { top: 8px; opacity: 1; }
+  }
+
+  .confidence-bar-fill {
+    transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .fade-in-up {
+    animation: fade-in-up 0.3s ease forwards;
+  }
+
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-hover {
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+  }
+  .card-hover:hover {
+    box-shadow: 0 4px 20px rgba(26, 107, 60, 0.12);
+    transform: translateY(-1px);
+  }
+
+  .row-hover:hover {
+    background-color: var(--muted);
+  }
+
+  .btn-primary {
+    background-color: var(--primary);
+    color: var(--primary-foreground);
+    transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  }
+  .btn-primary:hover {
+    background-color: #155c32;
+    box-shadow: 0 4px 12px rgba(26, 107, 60, 0.3);
+  }
+  .btn-primary:active {
+    transform: scale(0.97);
+  }
+
+  .btn-accent {
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+    transition: background-color 0.15s ease, transform 0.1s ease;
+  }
+  .btn-accent:hover {
+    background-color: #c98a1a;
+  }
+  .btn-accent:active {
+    transform: scale(0.97);
+  }
+
+  .btn-ghost {
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  .btn-ghost:hover {
+    background-color: var(--muted);
+  }
+
+  .sidebar-item-active {
+    background-color: var(--secondary);
+    color: var(--primary);
+    font-weight: 600;
+  }
+
+  .sidebar-item {
+    color: var(--muted-foreground);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  .sidebar-item:hover {
+    background-color: var(--muted);
+    color: var(--foreground);
+  }
+
+  .status-submitted {
+    background-color: var(--status-submitted-bg);
+    color: var(--status-submitted);
+  }
+  .status-processed {
+    background-color: var(--status-processed-bg);
+    color: var(--status-processed);
+  }
+  .status-invoiced {
+    background-color: var(--status-invoiced-bg);
+    color: var(--status-invoiced);
+  }
+  .status-paid {
+    background-color: var(--status-paid-bg);
+    color: var(--status-paid);
+  }
+  .status-draft {
+    background-color: var(--status-draft-bg);
+    color: var(--status-draft);
+  }
+  .status-sent {
+    background-color: var(--status-sent-bg);
+    color: var(--status-sent);
+  }
+
+  .metal-badge-fer { background-color: #f3f4f6; color: #374151; }
+  .metal-badge-acier { background-color: #e5e7eb; color: #1f2937; }
+  .metal-badge-aluminium { background-color: #dbeafe; color: #1d4ed8; }
+  .metal-badge-cuivre { background-color: #fef3c7; color: #92400e; }
+  .metal-badge-laiton { background-color: #fde68a; color: #78350f; }
+  .metal-badge-inox { background-color: #f4f4f5; color: #52525b; }
+}
