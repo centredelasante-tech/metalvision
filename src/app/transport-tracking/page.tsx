@@ -34,6 +34,25 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string
 
 const STEPS = ['scheduled', 'in_transit', 'arrived', 'delivered'];
 
+function formatDate(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleString('fr-CA', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function FormattedDate({ dateStr }: { dateStr: string }) {
+  const [formatted, setFormatted] = useState('');
+  useEffect(() => {
+    setFormatted(formatDate(dateStr));
+  }, [dateStr]);
+  return <>{formatted}</>;
+}
+
 function TransportStatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.scheduled;
   return (
@@ -172,10 +191,7 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
               <div className="flex items-center gap-2">
                 <Icon name="CalendarIcon" size={14} className="text-primary flex-shrink-0" />
                 <p className="text-sm font-600 text-foreground tabular-nums">
-                  {new Date(transport.arrival_eta ?? transport.scheduled_time!).toLocaleString('fr-CA', {
-                    dateStyle: 'medium',
-                    timeStyle: 'short',
-                  })}
+                  <FormattedDate dateStr={transport.arrival_eta ?? transport.scheduled_time!} />
                 </p>
               </div>
             </div>
@@ -185,10 +201,7 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
             <div className="flex items-center gap-2">
               <Icon name="ClockIcon" size={14} className="text-muted-foreground flex-shrink-0" />
               <p className="text-sm text-muted-foreground tabular-nums">
-                {new Date(transport.created_at).toLocaleString('fr-CA', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short',
-                })}
+                <FormattedDate dateStr={transport.created_at} />
               </p>
             </div>
           </div>
