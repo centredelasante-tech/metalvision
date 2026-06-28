@@ -18,6 +18,7 @@ const clientNav: NavItem[] = [
   { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon', group: 'principal' },
   { label: 'Mes conteneurs', href: '/container-detail', icon: 'ArchiveBoxIcon', group: 'principal' },
   { label: 'Suivi transport', href: '/transport-tracking', icon: 'TruckIcon', group: 'transport' },
+  { label: 'Impact Carbone', href: '/carbon-impact', icon: 'CloudIcon', group: 'carbone' },
 ];
 
 const adminNav: NavItem[] = [
@@ -28,16 +29,23 @@ const adminNav: NavItem[] = [
   { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badge: 3, group: 'finance' },
   { label: 'Prix métaux', href: '/', icon: 'CurrencyEuroIcon', group: 'finance' },
+  { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
+  { label: 'Facteurs GES', href: '/admin-emission-factors', icon: 'BeakerIcon', group: 'mrv' },
+  { label: 'Vérifications', href: '/admin-verification-sessions', icon: 'CheckBadgeIcon', group: 'mrv' },
+];
+
+const verifierNav: NavItem[] = [
+  { label: 'Vue MRV', href: '/verifier-mrv', icon: 'ClipboardDocumentListIcon', group: 'vérification' },
 ];
 
 interface SidebarProps {
   activeRoute: string;
-  userRole: 'client' | 'admin';
+  userRole: 'client' | 'admin' | 'verifier';
 }
 
 export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const navItems = userRole === 'admin' ? adminNav : clientNav;
+  const navItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
 
   const groups = Array.from(new Set(navItems.map((n) => n.group)));
 
@@ -121,16 +129,16 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         <div className={`flex items-center gap-3 px-3 py-2.5 mt-1 rounded-lg bg-muted ${collapsed ? 'justify-center' : ''}`}>
           <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
             <span className="text-primary-foreground text-xs font-700">
-              {userRole === 'admin' ? 'AD' : 'CL'}
+              {userRole === 'admin' ? 'AD' : userRole === 'verifier' ? 'VR' : 'CL'}
             </span>
           </div>
           {!collapsed && (
             <div className="min-w-0">
               <p className="text-sm font-600 text-foreground truncate">
-                {userRole === 'admin' ? 'Admin Récup.' : 'Client Industrie'}
+                {userRole === 'admin' ? 'Admin Récup.' : userRole === 'verifier' ? 'Vérificateur' : 'Client Industrie'}
               </p>
               <p className="text-xs text-muted-foreground truncate">
-                {userRole === 'admin' ? 'Opérateur' : 'Chantier Nord'}
+                {userRole === 'admin' ? 'Opérateur' : userRole === 'verifier' ? 'ISO 14064-2' : 'Chantier Nord'}
               </p>
             </div>
           )}
