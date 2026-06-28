@@ -3,35 +3,39 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Icon from '@/components/ui/AppIcon';
 
-
 interface TransportRequest {
   id: string;
   lot_id: string;
   container_id: string | null;
   pickup_address: string;
   dropoff_address: string;
+  arrival_eta: string | null;
   scheduled_time: string | null;
+  provider: string;
   transporter: string;
-  external_reference: string | null;
-  transport_status: 'pending' | 'assigned' | 'en_route' | 'picked_up' | 'delivered' | 'cancelled';
+  driver_name: string | null;
+  truck_number: string | null;
+  transport_mode: string | null;
+  transport_status: string;
+  proof_photo_url: string | null;
+  proof_document_url: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string; step: number }> = {
-  pending:   { label: 'En attente',    color: 'text-amber-600 bg-amber-50 border-amber-200',   icon: 'ClockIcon',           step: 0 },
-  assigned:  { label: 'Assigné',       color: 'text-blue-600 bg-blue-50 border-blue-200',      icon: 'TruckIcon',           step: 1 },
-  en_route:  { label: 'En route',      color: 'text-indigo-600 bg-indigo-50 border-indigo-200',icon: 'ArrowRightCircleIcon',step: 2 },
-  picked_up: { label: 'Collecté',      color: 'text-purple-600 bg-purple-50 border-purple-200',icon: 'ArchiveBoxIcon',      step: 3 },
-  delivered: { label: 'Livré',         color: 'text-green-600 bg-green-50 border-green-200',   icon: 'CheckCircleIcon',     step: 4 },
-  cancelled: { label: 'Annulé',        color: 'text-red-600 bg-red-50 border-red-200',         icon: 'XCircleIcon',         step: -1 },
+  scheduled:  { label: 'Planifié',    color: 'text-amber-600 bg-amber-50 border-amber-200',    icon: 'ClockIcon',           step: 0 },
+  in_transit: { label: 'En transit',  color: 'text-indigo-600 bg-indigo-50 border-indigo-200', icon: 'TruckIcon',           step: 1 },
+  arrived:    { label: 'Arrivé',      color: 'text-purple-600 bg-purple-50 border-purple-200', icon: 'MapPinIcon',          step: 2 },
+  delivered:  { label: 'Livré',       color: 'text-green-600 bg-green-50 border-green-200',    icon: 'CheckCircleIcon',     step: 3 },
+  cancelled:  { label: 'Annulé',      color: 'text-red-600 bg-red-50 border-red-200',          icon: 'XCircleIcon',         step: -1 },
 };
 
-const STEPS = ['pending', 'assigned', 'en_route', 'picked_up', 'delivered'];
+const STEPS = ['scheduled', 'in_transit', 'arrived', 'delivered'];
 
 function TransportStatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.scheduled;
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-600 border ${cfg.color}`}>
       <Icon name={cfg.icon as Parameters<typeof Icon>[0]['name']} size={12} />
@@ -80,22 +84,19 @@ function ProgressStepper({ status }: { status: string }) {
 }
 
 function TransportCard({ transport, onRefresh }: { transport: TransportRequest; onRefresh: () => void }) {
-  const [polling, setPolling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const handlePollStatus = async () => {
-    if (!transport.external_reference) return;
-    setPolling(true);
+  const handleRefresh = async () => {
+    setRefreshing(true);
     try {
-      const res = await fetch('/api/transport/poll-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dry_run: false }),
-      });
+      const res = await fetch(`/api/transport/${transport.id}/status`);
       if (res.ok) onRefresh();
     } finally {
-      setPolling(false);
+      setRefreshing(false);
     }
   };
+
+  const isInternal = transport.provider === 'internal';
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -113,24 +114,21 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
               )}
               <TransportStatusBadge status={transport.transport_status} />
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">{transport.transporter}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className={`text-xs font-600 px-2 py-0.5 rounded-full ${isInternal ? 'text-primary bg-secondary' : 'text-muted-foreground bg-muted'}`}>
+                {isInternal ? 'Transport interne MetalVision' : 'Transport du client'}
+              </span>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {transport.external_reference && (
-            <span className="text-xs font-600 text-muted-foreground tabular-nums bg-muted px-2 py-1 rounded">
-              Réf: {transport.external_reference}
-            </span>
-          )}
-          <button
-            onClick={handlePollStatus}
-            disabled={polling}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-600 border border-border rounded-lg btn-ghost disabled:opacity-50"
-          >
-            <Icon name="ArrowPathIcon" size={12} className={polling ? 'animate-spin' : ''} />
-            Actualiser
-          </button>
-        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-600 border border-border rounded-lg btn-ghost disabled:opacity-50"
+        >
+          <Icon name="ArrowPathIcon" size={12} className={refreshing ? 'animate-spin' : ''} />
+          Actualiser
+        </button>
       </div>
 
       {/* Progress stepper */}
@@ -141,30 +139,40 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
       {/* Details */}
       <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-3">
-          <div>
-            <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Adresse de collecte</p>
-            <div className="flex items-start gap-2">
-              <Icon name="MapPinIcon" size={14} className="text-primary mt-0.5 flex-shrink-0" />
-              <p className="text-sm text-foreground">{transport.pickup_address}</p>
+          {isInternal && transport.driver_name && (
+            <div>
+              <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Chauffeur</p>
+              <div className="flex items-center gap-2">
+                <Icon name="UserIcon" size={14} className="text-primary flex-shrink-0" />
+                <p className="text-sm font-600 text-foreground">{transport.driver_name}</p>
+              </div>
             </div>
-          </div>
-          <div>
-            <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Adresse de livraison</p>
-            <div className="flex items-start gap-2">
-              <Icon name="FlagIcon" size={14} className="text-accent mt-0.5 flex-shrink-0" />
-              <p className="text-sm text-foreground">{transport.dropoff_address}</p>
+          )}
+          {transport.truck_number && (
+            <div>
+              <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Camion</p>
+              <div className="flex items-center gap-2">
+                <Icon name="TruckIcon" size={14} className="text-primary flex-shrink-0" />
+                <p className="text-sm font-600 text-foreground">{transport.truck_number}</p>
+              </div>
             </div>
-          </div>
+          )}
+          {transport.transport_mode && (
+            <div>
+              <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Mode</p>
+              <p className="text-sm text-foreground capitalize">{transport.transport_mode}</p>
+            </div>
+          )}
         </div>
 
         <div className="space-y-3">
-          {transport.scheduled_time && (
+          {(transport.arrival_eta || transport.scheduled_time) && (
             <div>
-              <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Heure prévue</p>
+              <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">ETA d&apos;arrivée</p>
               <div className="flex items-center gap-2">
                 <Icon name="CalendarIcon" size={14} className="text-primary flex-shrink-0" />
                 <p className="text-sm font-600 text-foreground tabular-nums">
-                  {new Date(transport.scheduled_time).toLocaleString('fr-CA', {
+                  {new Date(transport.arrival_eta ?? transport.scheduled_time!).toLocaleString('fr-CA', {
                     dateStyle: 'medium',
                     timeStyle: 'short',
                   })}
@@ -193,11 +201,40 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
         </div>
       </div>
 
+      {/* Proof files */}
+      {(transport.proof_photo_url || transport.proof_document_url) && (
+        <div className="px-5 pb-4 flex flex-wrap gap-2">
+          <p className="w-full text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-1">Preuves</p>
+          {transport.proof_photo_url && (
+            <a
+              href={transport.proof_photo_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-muted rounded-lg text-xs font-600 text-foreground hover:bg-secondary transition-colors"
+            >
+              <Icon name="PhotoIcon" size={12} />
+              Photo de preuve
+            </a>
+          )}
+          {transport.proof_document_url && (
+            <a
+              href={transport.proof_document_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-muted rounded-lg text-xs font-600 text-foreground hover:bg-secondary transition-colors"
+            >
+              <Icon name="DocumentTextIcon" size={12} />
+              Document de preuve
+            </a>
+          )}
+        </div>
+      )}
+
       {/* Map placeholder */}
       <div className="mx-5 mb-5 rounded-xl bg-muted border border-border overflow-hidden h-32 flex items-center justify-center">
         <div className="flex flex-col items-center gap-2 text-muted-foreground">
           <Icon name="MapIcon" size={24} />
-          <p className="text-xs font-500">Carte de suivi — intégration cartographique à venir</p>
+          <p className="text-xs font-500">Carte de suivi GPS — intégration à venir</p>
         </div>
       </div>
     </div>
@@ -227,12 +264,11 @@ export default function TransportTrackingPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     fetchTransports();
 
-    // Real-time subscription
     const channel = supabase
       .channel('transport_tracking')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transport_requests' }, () => {
@@ -241,7 +277,7 @@ export default function TransportTrackingPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [fetchTransports]);
+  }, [fetchTransports, supabase]);
 
   const activeTransports = transports.filter(
     (t) => !['delivered', 'cancelled'].includes(t.transport_status)
@@ -261,7 +297,7 @@ export default function TransportTrackingPage() {
             </div>
             <div>
               <h1 className="text-xl font-700 text-foreground">Suivi du transport</h1>
-              <p className="text-sm text-muted-foreground">Groupe Robert — Statut en temps réel</p>
+              <p className="text-sm text-muted-foreground">Transport interne MetalVision — Statut en temps réel</p>
             </div>
           </div>
           <button
@@ -276,10 +312,10 @@ export default function TransportTrackingPage() {
         {/* KPI row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           {[
-            { label: 'En cours', count: activeTransports.length, color: 'text-blue-600', bg: 'bg-blue-50' },
-            { label: 'Livrés', count: transports.filter(t => t.transport_status === 'delivered').length, color: 'text-green-600', bg: 'bg-green-50' },
-            { label: 'En route', count: transports.filter(t => t.transport_status === 'en_route').length, color: 'text-indigo-600', bg: 'bg-indigo-50' },
-            { label: 'Annulés', count: transports.filter(t => t.transport_status === 'cancelled').length, color: 'text-red-600', bg: 'bg-red-50' },
+            { label: 'En cours', count: activeTransports.length, color: 'text-blue-600' },
+            { label: 'Livrés', count: transports.filter(t => t.transport_status === 'delivered').length, color: 'text-green-600' },
+            { label: 'En transit', count: transports.filter(t => t.transport_status === 'in_transit').length, color: 'text-indigo-600' },
+            { label: 'Annulés', count: transports.filter(t => t.transport_status === 'cancelled').length, color: 'text-red-600' },
           ].map((kpi) => (
             <div key={kpi.label} className="bg-card border border-border rounded-xl p-4">
               <p className="text-xs text-muted-foreground font-500 mb-1">{kpi.label}</p>
@@ -337,7 +373,7 @@ export default function TransportTrackingPage() {
             </div>
             <h3 className="text-base font-600 text-foreground mb-1">Aucun transport</h3>
             <p className="text-sm text-muted-foreground max-w-xs">
-              Les demandes de transport apparaîtront ici une fois qu'un lot sera accepté.
+              Les demandes de transport apparaîtront ici une fois qu&apos;un lot sera soumis.
             </p>
           </div>
         )}
