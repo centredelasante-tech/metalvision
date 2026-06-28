@@ -116,7 +116,7 @@ function TransportCard({ transport, onRefresh }: { transport: TransportRequest; 
             </div>
             <div className="flex items-center gap-2 mt-0.5">
               <span className={`text-xs font-600 px-2 py-0.5 rounded-full ${isInternal ? 'text-primary bg-secondary' : 'text-muted-foreground bg-muted'}`}>
-                {isInternal ? 'Transport interne MetalVision' : 'Transport du client'}
+                {isInternal ? 'Transport interne METALTRACE' : 'Transport du client'}
               </span>
             </div>
           </div>
@@ -297,7 +297,7 @@ export default function TransportTrackingPage() {
             </div>
             <div>
               <h1 className="text-xl font-700 text-foreground">Suivi du transport</h1>
-              <p className="text-sm text-muted-foreground">Transport interne MetalVision — Statut en temps réel</p>
+              <p className="text-sm text-muted-foreground">Transport interne METALTRACE — Statut en temps réel</p>
             </div>
           </div>
           <button

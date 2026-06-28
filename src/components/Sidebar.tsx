@@ -59,7 +59,7 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         <AppLogo size={32} />
         {!collapsed && (
           <span className="font-bold text-base text-foreground tracking-tight truncate">
-            MetalVision
+            METALTRACE
           </span>
         )}
       </div>

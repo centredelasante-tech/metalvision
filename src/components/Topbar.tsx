@@ -37,7 +37,7 @@ export default function Topbar({ userRole }: TopbarProps) {
           <Icon name="ChevronLeftIcon" size={20} />
         </button>
         <AppLogo size={26} />
-        <span className="font-bold text-sm text-foreground">MetalVision</span>
+        <span className="font-bold text-sm text-foreground">METALTRACE</span>
       </div>
 
       {/* Metal price ticker — desktop */}

@@ -5,10 +5,10 @@
 :root {
   --background: #f4f6f3;
   --foreground: #0f1a0f;
-  --primary: #1a6b3c;
+  --primary: #0A8A4A;
   --primary-foreground: #ffffff;
   --secondary: #e8f5ee;
-  --secondary-foreground: #1a6b3c;
+  --secondary-foreground: #0A8A4A;
   --accent: #e8a020;
   --accent-foreground: #ffffff;
   --muted: #eef1ed;
@@ -17,7 +17,7 @@
   --card-foreground: #0f1a0f;
   --border: #d6ddd6;
   --input: #e8ede8;
-  --ring: #1a6b3c;
+  --ring: #0A8A4A;
   --radius: 10px;
   --font-sans: var(--font-dm-sans), sans-serif;
 
@@ -126,7 +126,7 @@
     transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
   }
   .btn-primary:hover {
-    background-color: #155c32;
+    background-color: #077a40;
     box-shadow: 0 4px 12px rgba(26, 107, 60, 0.3);
   }
   .btn-primary:active {

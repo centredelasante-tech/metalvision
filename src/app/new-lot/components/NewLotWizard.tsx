@@ -16,7 +16,7 @@ export type TransportMode = 'internal' | 'client';
 
 export interface TransportDraft {
   mode: TransportMode;
-  // Internal MetalVision transport
+  // Internal METALTRACE transport
   driverName: string;
   truckNumber: string;
   arrivalEta: string;
@@ -215,7 +215,7 @@ function StepTransport({ draft, updateDraft, onNext, onBack }: StepTransportProp
             </div>
             <div>
               <p className={`text-sm font-700 ${t.mode === 'internal' ? 'text-primary' : 'text-foreground'}`}>
-                Transport interne MetalVision
+                Transport interne METALTRACE
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">Notre flotte prend en charge votre lot</p>
               <span className="inline-block mt-1.5 text-[10px] font-600 text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">

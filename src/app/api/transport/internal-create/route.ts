@@ -56,8 +56,8 @@ export async function POST(req: NextRequest) {
       .insert({
         lot_id,
         container_id: container_id ?? null,
-        pickup_address: pickup_address ?? 'MetalVision — Adresse de collecte',
-        dropoff_address: dropoff_address ?? 'MetalVision — Centre de traitement',
+        pickup_address: pickup_address ?? 'METALTRACE — Adresse de collecte',
+        dropoff_address: dropoff_address ?? 'METALTRACE — Centre de traitement',
         provider: resolvedProvider,
         driver_name: driver_name ?? null,
         truck_number: truck_number ?? null,
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
         proof_document_url: proof_document_url ?? null,
         client_transporter_name: client_transporter_name ?? null,
         transport_status: 'scheduled',
-        transporter: resolvedProvider === 'internal' ? 'Transport interne MetalVision' : (client_transporter_name ?? 'Transport du client'),
+        transporter: resolvedProvider === 'internal' ? 'Transport interne METALTRACE' : (client_transporter_name ?? 'Transport du client'),
         notes: notes ?? null,
       })
       .select()

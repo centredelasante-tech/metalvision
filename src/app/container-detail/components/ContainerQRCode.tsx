@@ -38,7 +38,7 @@ function QRCodePlaceholder({ value }: { value: string }) {
 export default function ContainerQRCode() {
   const [copied, setCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const qrValue = 'METALVISION:CT-003:8F2A4B9C';
+  const qrValue = 'https://metaltrace.ca/c/CT-003';
 
   useEffect(() => {
     setMounted(true);
