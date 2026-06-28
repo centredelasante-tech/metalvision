@@ -11,7 +11,7 @@ export default function AdminDashboardContent() {
         <div>
           <h1 className="text-xl md:text-2xl font-700 text-foreground">Tableau de bord opérateur</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            MetalVision Récupération — 04/06/2026 14:02 · Données en temps réel
+METALTRACE — 04/06/2026 14:02 · Données en temps réel
           </p>
         </div>
         <div className="flex items-center gap-2">

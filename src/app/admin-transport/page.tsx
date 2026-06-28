@@ -102,7 +102,7 @@ function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
           <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${isInternal ? 'bg-secondary' : 'bg-muted'}`}>
             <Icon name="TruckIcon" size={14} className="text-primary" />
             <span className="text-xs font-600 text-primary">
-              {isInternal ? 'Transport interne MetalVision' : 'Transport du client'}
+              {isInternal ? 'Transport interne METALTRACE' : 'Transport du client'}
             </span>
           </div>
 
@@ -284,7 +284,7 @@ export default function AdminTransportPage() {
             </div>
             <div>
               <h1 className="text-xl font-700 text-foreground">Transports internes</h1>
-              <p className="text-sm text-muted-foreground">MetalVision — Gestion de la flotte interne</p>
+              <p className="text-sm text-muted-foreground">METALTRACE — Gestion de la flotte interne</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -329,7 +329,7 @@ export default function AdminTransportPage() {
           <div className="w-px h-4 bg-border mx-1" />
           {[
             { value: 'all', label: 'Tous' },
-            { value: 'internal', label: 'Interne MetalVision' },
+            { value: 'internal', label: 'Interne METALTRACE' },
             { value: 'client', label: 'Transport client' },
           ].map((opt) => (
             <button

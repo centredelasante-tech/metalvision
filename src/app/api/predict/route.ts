@@ -8,9 +8,9 @@ import { createClient } from '@/lib/supabase/server';
  *
  * Body (JSON):
  *   client_id           : string   — required, identifies the requesting client
- *   metal_type_predicted: string   — from AnalysePhotoMetalvision
- *   volume_estimated_m3 : number   — from AnalysePhotoMetalvision
- *   object_type         : string | null — from AnalysePhotoMetalvision
+ *   metal_type_predicted: string   — from AnalysePhotoMetaltrace
+ *   volume_estimated_m3 : number   — from AnalysePhotoMetaltrace
+ *   object_type         : string | null — from AnalysePhotoMetaltrace
  *   metal_price_per_kg  : number   — optional, to compute valeur_estimée
  *
  * Logic:

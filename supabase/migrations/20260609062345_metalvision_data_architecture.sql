@@ -1,4 +1,4 @@
--- MetalVision Data Architecture
+-- METALTRACE Data Architecture
 -- Tables: raw_measurements, global_stats, object_profiles
 -- Strict data isolation: raw_measurements filtered by client_id
 -- global_stats and object_profiles are anonymous (no client_id)

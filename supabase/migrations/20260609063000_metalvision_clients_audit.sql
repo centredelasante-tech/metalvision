@@ -1,4 +1,4 @@
--- MetalVision: clients + audit_learning_log tables
+-- METALTRACE: clients + audit_learning_log tables
 -- Adds: clients (with RLS), audit_learning_log (with RLS)
 -- Also adds exact user-specified RLS policies on raw_measurements, global_stats, object_profiles
 

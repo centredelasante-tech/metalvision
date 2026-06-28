@@ -16,9 +16,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'MetalVision — Estimation de lots métalliques par IA',
+  title: 'METALTRACE — Traçabilité intelligente des métaux',
   description:
-    'MetalVision permet aux industriels de photographier leurs déchets métalliques pour obtenir une estimation instantanée par IA et planifier la collecte.',
+    'METALTRACE — La plateforme de traçabilité intelligente pour les métaux et le transport.',
   icons: {
     icon: [{ url: '/favicon.ico', type: 'image/x-icon' }],
   },

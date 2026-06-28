@@ -49,7 +49,9 @@ export async function GET(
         standard: 'ISO 14064-2:2019',
         generated_at: new Date().toISOString(),
         report_version: '1.0',
-        generator: 'MetalVision MRV Platform',
+        generator: 'METALTRACE MRV Platform',
+        title: 'Rapport ISO 14064-2 — METALTRACE',
+        footer: 'Traçabilité intelligente des métaux',
       },
       project: {
         id: project.id,
@@ -130,7 +132,7 @@ export async function GET(
 
     return NextResponse.json(report, {
       headers: {
-        'Content-Disposition': `attachment; filename="iso-report-${project_id}-${new Date().toISOString().split('T')[0]}.json"`,
+        'Content-Disposition': `attachment; filename="metaltrace_report_${project_id}_${new Date().toISOString().split('T')[0]}.json"`,
         'Content-Type': 'application/json',
       },
     });

@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
         transport_fees: transportFees,
         transport_provider,
         total: totalBilled,
-        note: transport_provider === 'internal' ? 'Transport interne MetalVision — frais de transport : 0 $' : null,
+        note: transport_provider === 'internal' ? 'Transport interne METALTRACE — frais de transport : 0 $' : null,
       },
       mrv: activityLog ? { activity_log_id: activityLog.activity_log?.id } : null,
     });
