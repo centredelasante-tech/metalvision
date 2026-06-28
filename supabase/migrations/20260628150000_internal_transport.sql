@@ -1,5 +1,5 @@
 -- ============================================================
--- Internal Transport System — MetalVision
+-- Internal Transport System — METALTRACE
 -- Migration: 20260628150000_internal_transport.sql
 -- Replaces Groupe Robert external transport with internal mode
 -- ============================================================

@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 /**
  * POST /api/transport/internal-create
  *
- * Creates an internal transport request (MetalVision internal fleet or client transport).
+ * Creates an internal transport request (METALTRACE internal fleet or client transport).
  * Stores proof files, creates MRV activity log, and returns status "scheduled".
  */
 export async function POST(req: NextRequest) {
