@@ -1,6 +1,6 @@
 'use client';
 import React, { useState } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
 import Icon from '@/components/ui/AppIcon';
 
@@ -16,8 +16,8 @@ const METAL_PRICES = [
 ];
 
 export default function Topbar({ userRole }: TopbarProps) {
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const router = useRouter();
 
   const notifications = [
     { id: 'notif-1', text: 'Lot #LOT-0847 traité — 127,40 €', time: 'Il y a 12 min', type: 'success' },
@@ -26,10 +26,17 @@ export default function Topbar({ userRole }: TopbarProps) {
   ];
 
   return (
-    <header className="h-16 bg-card border-b border-border flex items-center px-4 lg:px-6 gap-4 flex-shrink-0 z-10">
-      {/* Mobile logo */}
+    <header className="h-14 md:h-16 bg-card border-b border-border flex items-center px-3 md:px-6 gap-3 flex-shrink-0 z-10">
+      {/* Mobile: back button + logo */}
       <div className="flex lg:hidden items-center gap-2">
-        <AppLogo size={28} />
+        <button
+          onClick={() => router.back()}
+          className="w-9 h-9 rounded-lg btn-ghost flex items-center justify-center text-muted-foreground"
+          aria-label="Retour"
+        >
+          <Icon name="ChevronLeftIcon" size={20} />
+        </button>
+        <AppLogo size={26} />
         <span className="font-bold text-sm text-foreground">MetalVision</span>
       </div>
 
@@ -68,7 +75,7 @@ export default function Topbar({ userRole }: TopbarProps) {
           </button>
 
           {notifOpen && (
-            <div className="absolute right-0 top-12 w-80 bg-card border border-border rounded-xl shadow-modal z-50 overflow-hidden">
+            <div className="absolute right-0 top-12 w-[calc(100vw-2rem)] sm:w-80 bg-card border border-border rounded-xl shadow-modal z-50 overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                 <span className="text-sm font-600">Notifications</span>
                 <span className="text-xs text-accent font-600 cursor-pointer">Tout marquer lu</span>
@@ -86,7 +93,7 @@ export default function Topbar({ userRole }: TopbarProps) {
           )}
         </div>
 
-        {/* Role badge */}
+        {/* Role badge — desktop only */}
         <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-lg">
           <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
             <span className="text-primary-foreground text-[10px] font-700">
@@ -97,43 +104,7 @@ export default function Topbar({ userRole }: TopbarProps) {
             {userRole === 'admin' ? 'Administrateur' : 'Client'}
           </span>
         </div>
-
-        {/* Mobile hamburger */}
-        <button
-          onClick={() => setMobileOpen(!mobileOpen)}
-          className="lg:hidden w-9 h-9 rounded-lg btn-ghost flex items-center justify-center"
-          aria-label="Menu"
-        >
-          <Icon name={mobileOpen ? 'XMarkIcon' : 'Bars3Icon'} size={20} />
-        </button>
       </div>
-
-      {/* Mobile drawer */}
-      {mobileOpen && (
-        <div className="absolute top-16 left-0 right-0 bg-card border-b border-border shadow-modal z-40 lg:hidden">
-          <nav className="px-4 py-3 space-y-1">
-            {[
-              { label: 'Tableau de bord', href: userRole === 'admin' ? '/admin-dashboard' : '/', icon: 'HomeIcon' },
-              { label: 'Scanner QR', href: '/qr-code-scanner', icon: 'QrCodeIcon' },
-              { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon' },
-              { label: 'Conteneur', href: '/container-detail', icon: 'ArchiveBoxIcon' },
-              ...(userRole === 'admin' ? [
-                { label: 'Gestion lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon' },
-              ] : []),
-            ].map((item) => (
-              <Link
-                key={`mobile-nav-${item.href}`}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg sidebar-item text-sm font-medium"
-              >
-                <Icon name={item.icon as Parameters<typeof Icon>[0]['name']} size={18} />
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-      )}
     </header>
   );
 }

@@ -1,5 +1,5 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '@/components/ui/AppIcon';
 
 type ScanState = 'idle' | 'scanning' | 'success' | 'error';
@@ -8,92 +8,177 @@ export default function QRScannerViewfinder() {
   const [scanState, setScanState] = useState<ScanState>('idle');
   const [torchOn, setTorchOn] = useState(false);
   const [detectedCode, setDetectedCode] = useState('');
+  const [torchSupported, setTorchSupported] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const torchTrackRef = useRef<MediaStreamTrack | null>(null);
 
-  const handleStartScan = () => {
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    torchTrackRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => stopStream();
+  }, [stopStream]);
+
+  const handleStartScan = async () => {
     setScanState('scanning');
-    // BACKEND INTEGRATION: Initialize camera stream and QR decoder here
-    // Use jsQR or ZXing to decode frames from <video> element
-    setTimeout(() => {
-      setDetectedCode('CT-003-QR-8F2A4B');
-      setScanState('success');
-    }, 3000);
+    try {
+      // Force environment (rear) camera, disable continuous autofocus on Android
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { exact: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          // @ts-ignore — advanced constraints for Android autofocus
+          advanced: [{ focusMode: 'single-shot' }],
+        },
+      };
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch {
+        // Fallback: try without exact constraint (some desktop browsers)
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+        });
+      }
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+
+      // Check torch support
+      const track = stream.getVideoTracks()[0];
+      torchTrackRef.current = track;
+      const capabilities = track.getCapabilities?.() as Record<string, unknown> | undefined;
+      if (capabilities && 'torch' in capabilities) {
+        setTorchSupported(true);
+      }
+
+      // Simulate QR detection after 3s (replace with jsQR in production)
+      setTimeout(() => {
+        setDetectedCode('CT-003-QR-8F2A4B');
+        setScanState('success');
+        stopStream();
+      }, 3000);
+    } catch {
+      setScanState('error');
+    }
+  };
+
+  const handleToggleTorch = async () => {
+    if (!torchTrackRef.current) return;
+    const newState = !torchOn;
+    try {
+      await torchTrackRef.current.applyConstraints({
+        // @ts-ignore
+        advanced: [{ torch: newState }],
+      });
+      setTorchOn(newState);
+    } catch {
+      // torch not supported on this device
+    }
   };
 
   const handleReset = () => {
+    stopStream();
     setScanState('idle');
     setDetectedCode('');
+    setTorchOn(false);
+    setTorchSupported(false);
   };
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <Icon name="QrCodeIcon" size={18} className="text-primary" />
-          <h2 className="text-sm font-600 text-foreground">Lecteur QR code</h2>
+          <h2 className="text-base font-600 text-foreground">Lecteur QR code</h2>
         </div>
         <div className="flex items-center gap-2">
+          {/* Flash / Torch button */}
           <button
-            onClick={() => setTorchOn(!torchOn)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-600 border transition-all ${
+            onClick={handleToggleTorch}
+            disabled={!torchSupported && scanState !== 'scanning'}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-600 border transition-all min-h-[40px] ${
               torchOn
                 ? 'bg-accent text-accent-foreground border-amber-300'
                 : 'bg-muted text-muted-foreground border-border btn-ghost'
-            }`}
+            } ${!torchSupported ? 'opacity-50' : ''}`}
+            title={torchSupported ? (torchOn ? 'Flash ON' : 'Flash OFF') : 'Flash non disponible'}
           >
-            <Icon name="LightBulbIcon" size={14} />
-            {torchOn ? 'Torche ON' : 'Torche'}
-          </button>
-          <button
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-600 border border-border bg-muted text-muted-foreground btn-ghost"
-          >
-            <Icon name="ArrowPathIcon" size={14} />
-            Inverser
+            <Icon name="LightBulbIcon" size={16} />
+            <span className="hidden sm:inline">{torchOn ? 'Flash ON' : 'Flash'}</span>
           </button>
         </div>
       </div>
 
       {/* Viewfinder */}
-      <div className="relative bg-gray-900 aspect-[4/3] w-full flex items-center justify-center overflow-hidden">
-        {/* Simulated camera feed background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-950 opacity-90" />
+      <div className="relative bg-gray-900 w-full overflow-hidden" style={{ aspectRatio: '4/3' }}>
+        {/* Live camera video */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`absolute inset-0 w-full h-full object-cover ${scanState === 'scanning' ? 'block' : 'hidden'}`}
+        />
 
-        {/* Corner decorations */}
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 w-56 h-56">
-          {/* Scan frame */}
-          {(scanState === 'idle' || scanState === 'scanning') && (
-            <>
-              {/* Corners */}
-              <div className="absolute top-0 left-0 w-8 h-8 border-t-3 border-l-3 border-primary rounded-tl-lg" style={{ borderTopWidth: 3, borderLeftWidth: 3 }} />
-              <div className="absolute top-0 right-0 w-8 h-8 border-t-3 border-r-3 border-primary rounded-tr-lg" style={{ borderTopWidth: 3, borderRightWidth: 3 }} />
-              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-3 border-l-3 border-primary rounded-bl-lg" style={{ borderBottomWidth: 3, borderLeftWidth: 3 }} />
-              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-3 border-r-3 border-primary rounded-br-lg" style={{ borderBottomWidth: 3, borderRightWidth: 3 }} />
-
-              {/* Scan line */}
-              {scanState === 'scanning' && (
-                <div className="absolute left-2 right-2 h-0.5 bg-primary opacity-80 scan-line-animate" />
-              )}
-            </>
-          )}
-
-          {/* Success state */}
-          {scanState === 'success' && (
+        {/* Dark overlay with scan frame cutout */}
+        {(scanState === 'idle' || scanState === 'scanning') && (
+          <>
+            {/* Semi-transparent overlay */}
+            <div className="absolute inset-0 bg-black/50" />
+            {/* Scan frame */}
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center shadow-elevated fade-in-up">
-                <Icon name="CheckIcon" size={32} className="text-primary-foreground" />
+              <div className="relative w-56 h-56 sm:w-64 sm:h-64">
+                {/* Clear center */}
+                <div className="absolute inset-0 bg-transparent border-0" />
+                {/* Corner brackets */}
+                <div className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-primary rounded-tl-lg" />
+                <div className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-primary rounded-tr-lg" />
+                <div className="absolute bottom-0 left-0 w-8 h-8 border-b-[3px] border-l-[3px] border-primary rounded-bl-lg" />
+                <div className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-primary rounded-br-lg" />
+                {/* Scan line */}
+                {scanState === 'scanning' && (
+                  <div className="absolute left-2 right-2 h-0.5 bg-primary opacity-80 scan-line-animate" />
+                )}
               </div>
             </div>
-          )}
+          </>
+        )}
 
-          {/* Error state */}
-          {scanState === 'error' && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center fade-in-up">
-                <Icon name="XMarkIcon" size={32} className="text-white" />
-              </div>
+        {/* Idle background */}
+        {scanState === 'idle' && (
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-950" />
+        )}
+
+        {/* Success state */}
+        {scanState === 'success' && (
+          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+            <div className="w-20 h-20 bg-primary rounded-full flex items-center justify-center shadow-elevated fade-in-up">
+              <Icon name="CheckIcon" size={36} className="text-primary-foreground" />
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {scanState === 'error' && (
+          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+            <div className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center fade-in-up">
+              <Icon name="XMarkIcon" size={36} className="text-white" />
+            </div>
+          </div>
+        )}
 
         {/* Status overlay bottom */}
         <div className="absolute bottom-0 left-0 right-0 p-4">
@@ -116,30 +201,30 @@ export default function QRScannerViewfinder() {
           )}
           {scanState === 'error' && (
             <div className="bg-red-500/90 rounded-lg px-4 py-2 text-center">
-              <p className="text-white text-sm font-600">QR code non reconnu</p>
-              <p className="text-white/80 text-xs mt-0.5">Vérifiez que le conteneur est enregistré</p>
+              <p className="text-white text-sm font-600">Caméra non disponible ou QR non reconnu</p>
+              <p className="text-white/80 text-xs mt-0.5">Vérifiez les permissions caméra</p>
             </div>
           )}
         </div>
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-3 p-5">
+      <div className="flex items-center gap-3 p-4">
         {scanState === 'idle' && (
           <button
             onClick={handleStartScan}
-            className="flex-1 btn-primary py-3 rounded-lg text-sm font-600 flex items-center justify-center gap-2"
+            className="flex-1 btn-primary py-3 rounded-lg text-base font-600 flex items-center justify-center gap-2 min-h-[48px]"
           >
-            <Icon name="CameraIcon" size={18} className="text-primary-foreground" />
+            <Icon name="CameraIcon" size={20} className="text-primary-foreground" />
             Démarrer la caméra
           </button>
         )}
         {scanState === 'scanning' && (
           <button
             onClick={handleReset}
-            className="flex-1 py-3 rounded-lg text-sm font-600 border border-border text-foreground btn-ghost flex items-center justify-center gap-2"
+            className="flex-1 py-3 rounded-lg text-base font-600 border border-border text-foreground btn-ghost flex items-center justify-center gap-2 min-h-[48px]"
           >
-            <Icon name="StopIcon" size={18} />
+            <Icon name="StopIcon" size={20} />
             Arrêter
           </button>
         )}
@@ -147,14 +232,14 @@ export default function QRScannerViewfinder() {
           <>
             <a
               href="/container-detail"
-              className="flex-1 btn-primary py-3 rounded-lg text-sm font-600 flex items-center justify-center gap-2"
+              className="flex-1 btn-primary py-3 rounded-lg text-base font-600 flex items-center justify-center gap-2 min-h-[48px]"
             >
-              <Icon name="ArrowRightIcon" size={18} className="text-primary-foreground" />
+              <Icon name="ArrowRightIcon" size={20} className="text-primary-foreground" />
               Ouvrir le conteneur
             </a>
             <button
               onClick={handleReset}
-              className="px-4 py-3 rounded-lg text-sm font-600 border border-border text-foreground btn-ghost"
+              className="px-4 py-3 rounded-lg text-sm font-600 border border-border text-foreground btn-ghost min-h-[48px]"
             >
               Nouveau scan
             </button>
@@ -163,9 +248,9 @@ export default function QRScannerViewfinder() {
         {scanState === 'error' && (
           <button
             onClick={handleReset}
-            className="flex-1 py-3 rounded-lg text-sm font-600 btn-primary flex items-center justify-center gap-2"
+            className="flex-1 py-3 rounded-lg text-base font-600 btn-primary flex items-center justify-center gap-2 min-h-[48px]"
           >
-            <Icon name="ArrowPathIcon" size={18} className="text-primary-foreground" />
+            <Icon name="ArrowPathIcon" size={20} className="text-primary-foreground" />
             Réessayer
           </button>
         )}
