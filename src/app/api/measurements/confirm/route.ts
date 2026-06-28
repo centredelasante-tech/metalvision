@@ -6,11 +6,26 @@ import { createClient } from '@/lib/supabase/server';
  *
  * ConfirmOfficialMeasurement — integrates official weighing data into a raw measurement.
  * Also triggers GHG calculation and creates a project_activity_log + evidence_file.
+ *
+ * Billing rule: if transport_provider = 'internal', transport_fees = 0.
+ * Only metal_value + service_fees + sorting_fees are charged.
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { measurement_id, client_id, official_weight_kg, official_metal_type, price_paid, project_id, photo_url } = body;
+    const {
+      measurement_id,
+      client_id,
+      official_weight_kg,
+      official_metal_type,
+      price_paid,
+      project_id,
+      photo_url,
+      // Transport fields
+      transport_provider = 'internal',
+      service_fees = 0,
+      sorting_fees = 0,
+    } = body;
 
     if (!measurement_id || typeof measurement_id !== 'string') {
       return NextResponse.json({ error: 'measurement_id is required' }, { status: 400 });
@@ -56,6 +71,12 @@ export async function POST(req: NextRequest) {
       densityReal = Math.round((official_weight_kg / volumeM3) * 10000) / 10000;
     }
 
+    // ── Billing: internal transport = 0 transport fees ───────────────────────
+    // Rule: if provider = 'internal', transport_fees = 0
+    // Total = metal_value + service_fees + sorting_fees (no transport fees)
+    const transportFees = transport_provider === 'internal' ? 0 : 0; // always 0 until external enabled
+    const totalBilled = price_paid + service_fees + sorting_fees + transportFees;
+
     // ── Update the row ───────────────────────────────────────────────────────
     const { data: updated, error: updateError } = await supabase
       .from('raw_measurements')
@@ -80,7 +101,6 @@ export async function POST(req: NextRequest) {
       try {
         const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
-        // Calculate GHG for recycling activity
         const ghgRes = await fetch(`${baseUrl}/api/ghg/calculate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -97,7 +117,6 @@ export async function POST(req: NextRequest) {
         if (ghgRes.ok) {
           const ghgData = await ghgRes.json();
 
-          // Create activity log
           const logRes = await fetch(`${baseUrl}/api/projects/${project_id}/log-activity`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -119,7 +138,7 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch {
-        // MRV integration is non-blocking — measurement confirm still succeeds
+        // MRV integration is non-blocking
       }
     }
 
@@ -130,6 +149,15 @@ export async function POST(req: NextRequest) {
       official_weight_kg: updated.official_weight_kg,
       official_metal_type: updated.official_metal_type,
       price_paid: updated.price_paid,
+      billing: {
+        metal_value: price_paid,
+        service_fees,
+        sorting_fees,
+        transport_fees: transportFees,
+        transport_provider,
+        total: totalBilled,
+        note: transport_provider === 'internal' ? 'Transport interne MetalVision — frais de transport : 0 $' : null,
+      },
       mrv: activityLog ? { activity_log_id: activityLog.activity_log?.id } : null,
     });
   } catch (err: unknown) {

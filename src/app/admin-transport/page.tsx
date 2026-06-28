@@ -9,10 +9,16 @@ interface TransportRequest {
   container_id: string | null;
   pickup_address: string;
   dropoff_address: string;
+  arrival_eta: string | null;
   scheduled_time: string | null;
+  provider: string;
   transporter: string;
-  external_reference: string | null;
-  transport_status: 'pending' | 'assigned' | 'en_route' | 'picked_up' | 'delivered' | 'cancelled';
+  driver_name: string | null;
+  truck_number: string | null;
+  transport_mode: string | null;
+  transport_status: string;
+  proof_photo_url: string | null;
+  proof_document_url: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -20,29 +26,27 @@ interface TransportRequest {
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'Tous les statuts' },
-  { value: 'pending', label: 'En attente' },
-  { value: 'assigned', label: 'Assigné' },
-  { value: 'en_route', label: 'En route' },
-  { value: 'picked_up', label: 'Collecté' },
+  { value: 'scheduled', label: 'Planifié' },
+  { value: 'in_transit', label: 'En transit' },
+  { value: 'arrived', label: 'Arrivé' },
   { value: 'delivered', label: 'Livré' },
   { value: 'cancelled', label: 'Annulé' },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  pending:   'text-amber-700 bg-amber-50 border-amber-200',
-  assigned:  'text-blue-700 bg-blue-50 border-blue-200',
-  en_route:  'text-indigo-700 bg-indigo-50 border-indigo-200',
-  picked_up: 'text-purple-700 bg-purple-50 border-purple-200',
-  delivered: 'text-green-700 bg-green-50 border-green-200',
-  cancelled: 'text-red-700 bg-red-50 border-red-200',
+  scheduled:  'text-amber-700 bg-amber-50 border-amber-200',
+  in_transit: 'text-indigo-700 bg-indigo-50 border-indigo-200',
+  arrived:    'text-purple-700 bg-purple-50 border-purple-200',
+  delivered:  'text-green-700 bg-green-50 border-green-200',
+  cancelled:  'text-red-700 bg-red-50 border-red-200',
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: 'En attente', assigned: 'Assigné', en_route: 'En route',
-  picked_up: 'Collecté', delivered: 'Livré', cancelled: 'Annulé',
+  scheduled: 'Planifié', in_transit: 'En transit', arrived: 'Arrivé',
+  delivered: 'Livré', cancelled: 'Annulé',
 };
 
-const VALID_STATUSES = ['pending', 'assigned', 'en_route', 'picked_up', 'delivered', 'cancelled'];
+const VALID_STATUSES = ['scheduled', 'in_transit', 'arrived', 'delivered', 'cancelled'];
 
 function TransportStatusBadge({ status }: { status: string }) {
   return (
@@ -55,7 +59,7 @@ function TransportStatusBadge({ status }: { status: string }) {
 interface DetailModalProps {
   transport: TransportRequest;
   onClose: () => void;
-  onStatusUpdate: (id: string, ref: string, newStatus: string) => Promise<void>;
+  onStatusUpdate: (id: string, newStatus: string) => Promise<void>;
 }
 
 function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
@@ -68,7 +72,7 @@ function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
     setUpdating(true);
     setUpdateMsg(null);
     try {
-      await onStatusUpdate(transport.id, transport.external_reference ?? transport.id, selectedStatus);
+      await onStatusUpdate(transport.id, selectedStatus);
       setUpdateMsg('Statut mis à jour avec succès.');
     } catch (e: unknown) {
       setUpdateMsg(e instanceof Error ? e.message : 'Erreur lors de la mise à jour.');
@@ -77,14 +81,16 @@ function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
     }
   };
 
+  const isInternal = transport.provider === 'internal';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-card rounded-2xl border border-border w-full max-w-lg shadow-xl overflow-hidden">
+      <div className="bg-card rounded-2xl border border-border w-full max-w-lg shadow-xl overflow-hidden max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
           <div className="flex items-center gap-3">
             <Icon name="TruckIcon" size={18} className="text-primary" />
-            <h2 className="text-base font-700 text-foreground">Détail transport</h2>
+            <h2 className="text-base font-700 text-foreground">Détail transport interne</h2>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg btn-ghost">
             <Icon name="XMarkIcon" size={18} />
@@ -92,45 +98,38 @@ function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
         </div>
 
         <div className="p-5 space-y-4">
+          {/* Provider badge */}
+          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${isInternal ? 'bg-secondary' : 'bg-muted'}`}>
+            <Icon name="TruckIcon" size={14} className="text-primary" />
+            <span className="text-xs font-600 text-primary">
+              {isInternal ? 'Transport interne MetalVision' : 'Transport du client'}
+            </span>
+          </div>
+
           {/* Info grid */}
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'Lot', value: `#${transport.lot_id.toUpperCase()}` },
               { label: 'Conteneur', value: transport.container_id ?? '—' },
+              { label: 'Chauffeur', value: transport.driver_name ?? '—' },
+              { label: 'Camion', value: transport.truck_number ?? '—' },
+              { label: 'Mode', value: transport.transport_mode ?? '—' },
               { label: 'Transporteur', value: transport.transporter },
-              { label: 'Réf. externe', value: transport.external_reference ?? '—' },
             ].map(({ label, value }) => (
               <div key={label} className="bg-muted rounded-lg p-3">
                 <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
-                <p className="text-sm font-600 text-foreground tabular-nums">{value}</p>
+                <p className="text-sm font-600 text-foreground">{value}</p>
               </div>
             ))}
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-start gap-2 p-3 bg-muted rounded-lg">
-              <Icon name="MapPinIcon" size={14} className="text-primary mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide">Collecte</p>
-                <p className="text-sm text-foreground">{transport.pickup_address}</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-2 p-3 bg-muted rounded-lg">
-              <Icon name="FlagIcon" size={14} className="text-accent mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide">Livraison</p>
-                <p className="text-sm text-foreground">{transport.dropoff_address}</p>
-              </div>
-            </div>
-          </div>
-
-          {transport.scheduled_time && (
+          {transport.arrival_eta && (
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
               <Icon name="CalendarIcon" size={14} className="text-primary flex-shrink-0" />
               <div>
-                <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide">Heure prévue</p>
+                <p className="text-[11px] font-600 text-muted-foreground uppercase tracking-wide">ETA d&apos;arrivée</p>
                 <p className="text-sm font-600 text-foreground tabular-nums">
-                  {new Date(transport.scheduled_time).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}
+                  {new Date(transport.arrival_eta).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}
                 </p>
               </div>
             </div>
@@ -143,13 +142,44 @@ function DetailModal({ transport, onClose, onStatusUpdate }: DetailModalProps) {
             </div>
           )}
 
+          {/* Proof files */}
+          {(transport.proof_photo_url || transport.proof_document_url) && (
+            <div className="space-y-2">
+              <p className="text-xs font-600 text-foreground">Preuves</p>
+              <div className="flex flex-wrap gap-2">
+                {transport.proof_photo_url && (
+                  <a
+                    href={transport.proof_photo_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-2 bg-muted rounded-lg text-xs font-600 text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <Icon name="PhotoIcon" size={12} />
+                    Photo de preuve
+                  </a>
+                )}
+                {transport.proof_document_url && (
+                  <a
+                    href={transport.proof_document_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-2 bg-muted rounded-lg text-xs font-600 text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <Icon name="DocumentTextIcon" size={12} />
+                    Document
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Manual status update */}
           <div className="border-t border-border pt-4">
             <p className="text-xs font-600 text-foreground mb-2">Mise à jour manuelle du statut</p>
             <div className="flex gap-2">
               <select
                 value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value as TransportRequest['transport_status'])}
+                onChange={(e) => setSelectedStatus(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-lg border border-border bg-input text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 {VALID_STATUSES.map((s) => (
@@ -181,9 +211,8 @@ export default function AdminTransportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [providerFilter, setProviderFilter] = useState('all');
   const [selectedTransport, setSelectedTransport] = useState<TransportRequest | null>(null);
-  const [polling, setPolling] = useState(false);
-  const [pollMsg, setPollMsg] = useState<string | null>(null);
   const supabase = createClient();
 
   const fetchTransports = useCallback(async () => {
@@ -198,6 +227,9 @@ export default function AdminTransportPage() {
       if (statusFilter !== 'all') {
         query = query.eq('transport_status', statusFilter);
       }
+      if (providerFilter !== 'all') {
+        query = query.eq('provider', providerFilter);
+      }
 
       const { data, error: fetchError } = await query;
       if (fetchError) setError(fetchError.message);
@@ -205,7 +237,7 @@ export default function AdminTransportPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, providerFilter, supabase]);
 
   useEffect(() => {
     fetchTransports();
@@ -218,50 +250,27 @@ export default function AdminTransportPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [fetchTransports]);
+  }, [fetchTransports, supabase]);
 
-  const handleStatusUpdate = async (id: string, ref: string, newStatus: string) => {
+  const handleStatusUpdate = async (id: string, newStatus: string) => {
     const res = await fetch('/api/transport/update-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ external_reference: ref, new_status: newStatus }),
+      body: JSON.stringify({ transport_id: id, new_status: newStatus }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Erreur');
     await fetchTransports();
     if (selectedTransport) {
-      setSelectedTransport((prev) => prev ? { ...prev, transport_status: newStatus as TransportRequest['transport_status'] } : null);
+      setSelectedTransport((prev) => prev ? { ...prev, transport_status: newStatus } : null);
     }
   };
 
-  const handlePollAll = async () => {
-    setPolling(true);
-    setPollMsg(null);
-    try {
-      const res = await fetch('/api/transport/poll-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dry_run: false }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPollMsg(`${data.processed} demande(s) vérifiée(s).`);
-        await fetchTransports();
-      } else {
-        setPollMsg(data.error ?? 'Erreur lors du polling.');
-      }
-    } finally {
-      setPolling(false);
-      setTimeout(() => setPollMsg(null), 4000);
-    }
-  };
-
-  // KPI counts
   const kpis = {
     total: transports.length,
     active: transports.filter(t => !['delivered', 'cancelled'].includes(t.transport_status)).length,
     delivered: transports.filter(t => t.transport_status === 'delivered').length,
-    cancelled: transports.filter(t => t.transport_status === 'cancelled').length,
+    internal: transports.filter(t => t.provider === 'internal').length,
   };
 
   return (
@@ -274,24 +283,15 @@ export default function AdminTransportPage() {
               <Icon name="TruckIcon" size={20} className="text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-xl font-700 text-foreground">Gestion des transports</h1>
-              <p className="text-sm text-muted-foreground">Groupe Robert — Administration</p>
+              <h1 className="text-xl font-700 text-foreground">Transports internes</h1>
+              <p className="text-sm text-muted-foreground">MetalVision — Gestion de la flotte interne</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {pollMsg && (
-              <span className="text-xs text-green-600 font-500 bg-green-50 px-3 py-1.5 rounded-lg border border-green-200">
-                {pollMsg}
-              </span>
-            )}
-            <button
-              onClick={handlePollAll}
-              disabled={polling}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-600 border border-border rounded-lg btn-ghost disabled:opacity-50"
-            >
-              <Icon name="ArrowPathIcon" size={14} className={polling ? 'animate-spin' : ''} />
-              Sync Groupe Robert
-            </button>
+            <span className="text-xs font-600 text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+              <Icon name="CheckCircleIcon" size={12} />
+              Mode transport interne actif
+            </span>
           </div>
         </div>
 
@@ -301,7 +301,7 @@ export default function AdminTransportPage() {
             { label: 'Total', value: kpis.total, color: 'text-foreground' },
             { label: 'En cours', value: kpis.active, color: 'text-blue-600' },
             { label: 'Livrés', value: kpis.delivered, color: 'text-green-600' },
-            { label: 'Annulés', value: kpis.cancelled, color: 'text-red-600' },
+            { label: 'Internes', value: kpis.internal, color: 'text-primary' },
           ].map((kpi) => (
             <div key={kpi.label} className="bg-card border border-border rounded-xl p-4">
               <p className="text-xs text-muted-foreground font-500 mb-1">{kpi.label}</p>
@@ -326,6 +326,23 @@ export default function AdminTransportPage() {
               {opt.label}
             </button>
           ))}
+          <div className="w-px h-4 bg-border mx-1" />
+          {[
+            { value: 'all', label: 'Tous' },
+            { value: 'internal', label: 'Interne MetalVision' },
+            { value: 'client', label: 'Transport client' },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setProviderFilter(opt.value)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-600 border transition-all ${
+                providerFilter === opt.value
+                  ? 'bg-secondary text-primary border-primary' :'bg-card text-muted-foreground border-border btn-ghost'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
 
         {/* Error */}
@@ -342,7 +359,7 @@ export default function AdminTransportPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  {['Lot', 'Conteneur', 'Transporteur', 'Réf. externe', 'Statut', 'Heure prévue', 'Créé le', 'Actions'].map((h) => (
+                  {['Lot', 'Conteneur', 'Type', 'Chauffeur / Transporteur', 'Camion', 'Statut', 'ETA', 'Preuves', 'Actions'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-[11px] font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">
                       {h}
                     </th>
@@ -353,7 +370,7 @@ export default function AdminTransportPage() {
                 {loading ? (
                   Array.from({ length: 4 }).map((_, i) => (
                     <tr key={i} className="border-b border-border">
-                      {Array.from({ length: 8 }).map((_, j) => (
+                      {Array.from({ length: 9 }).map((_, j) => (
                         <td key={j} className="px-4 py-3">
                           <div className="h-4 bg-muted rounded animate-pulse w-20" />
                         </td>
@@ -362,7 +379,7 @@ export default function AdminTransportPage() {
                   ))
                 ) : transports.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted-foreground">
                       Aucune demande de transport trouvée.
                     </td>
                   </tr>
@@ -375,20 +392,39 @@ export default function AdminTransportPage() {
                       <td className="px-4 py-3">
                         <span className="text-xs bg-muted px-2 py-0.5 rounded font-500">{t.container_id ?? '—'}</span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-foreground whitespace-nowrap">{t.transporter}</td>
                       <td className="px-4 py-3">
-                        <span className="text-xs font-500 text-muted-foreground tabular-nums">{t.external_reference ?? '—'}</span>
+                        <span className={`text-xs font-600 px-2 py-0.5 rounded-full ${t.provider === 'internal' ? 'text-primary bg-secondary' : 'text-muted-foreground bg-muted'}`}>
+                          {t.provider === 'internal' ? 'Interne' : 'Client'}
+                        </span>
                       </td>
+                      <td className="px-4 py-3 text-xs text-foreground whitespace-nowrap">
+                        {t.driver_name ?? t.transporter ?? '—'}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{t.truck_number ?? '—'}</td>
                       <td className="px-4 py-3">
                         <TransportStatusBadge status={t.transport_status} />
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                        {t.scheduled_time
-                          ? new Date(t.scheduled_time).toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' })
+                        {(t.arrival_eta || t.scheduled_time)
+                          ? new Date(t.arrival_eta ?? t.scheduled_time!).toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' })
                           : '—'}
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                        {new Date(t.created_at).toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' })}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1">
+                          {t.proof_photo_url && (
+                            <a href={t.proof_photo_url} target="_blank" rel="noopener noreferrer" title="Photo de preuve">
+                              <Icon name="PhotoIcon" size={14} className="text-primary hover:text-primary/70" />
+                            </a>
+                          )}
+                          {t.proof_document_url && (
+                            <a href={t.proof_document_url} target="_blank" rel="noopener noreferrer" title="Document de preuve">
+                              <Icon name="DocumentTextIcon" size={14} className="text-primary hover:text-primary/70" />
+                            </a>
+                          )}
+                          {!t.proof_photo_url && !t.proof_document_url && (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <button
