@@ -72,7 +72,9 @@ const getToken = () =>
     c.name.includes('auth-token')
   )?.value ?? null;
 
-if (typeof window !== 'undefined' && !(window as any).__sb_patched__) {
+const patchFetch = () => {
+  if (typeof window === 'undefined') return;
+  if ((window as any).__sb_patched__) return;
   (window as any).__sb_patched__ = true;
   const orig = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -83,14 +85,15 @@ if (typeof window !== 'undefined' && !(window as any).__sb_patched__) {
         : input instanceof URL
         ? input.href
         : (input as Request).url;
-    if (token && typeof window !== 'undefined' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
+    if (token && (url.startsWith('/') || url.startsWith(window.location.origin))) {
       init = { ...(init || {}), headers: { ...(init?.headers || {}), 'x-sb-token': token } };
     }
     return orig(input, init);
   };
-}
+};
 
 export function createClient() {
+  patchFetch();
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
