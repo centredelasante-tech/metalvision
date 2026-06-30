@@ -28,7 +28,7 @@ const LOT_DATA = {
   status: 'submitted\' as \'submitted\' | \'processed\' | \'invoiced',
   submittedAt: '03/06/2026 16:05',
   notes: 'Chutes de profilés acier provenant du chantier de rénovation bâtiment C.',
-  photoUrl: "https://img.rocket.new/generatedImages/rocket_gen_img_1e5ffaba4-1766255079156.png",
+  photoUrl: "https://images.unsplash.com/photo-1525926753424-b230d9801c70",
   timeline: [
   { id: 'tl-1', event: 'Lot soumis', date: '03/06/2026 16:05', by: 'Ahmed Karim (Client)' },
   { id: 'tl-2', event: 'Analyse IA complétée', date: '03/06/2026 16:05', by: 'IA METALTRACE' }]
