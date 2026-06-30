@@ -1,8 +1,9 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import AppLogo from '@/components/ui/AppLogo';
 import Icon from '@/components/ui/AppIcon';
+import { createClient } from '@/lib/supabase/client';
 
 interface NavItem {
   label: string;
@@ -43,11 +44,53 @@ interface SidebarProps {
   userRole: 'client' | 'admin' | 'verifier';
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  owner: 'Propriétaire',
+  terrain: 'Employé terrain',
+};
+
 export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const navItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
+  const [companyName, setCompanyName] = useState<string | null>(null);
+  const [memberRole, setMemberRole] = useState<string | null>(null);
 
+  const navItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
   const groups = Array.from(new Set(navItems.map((n) => n.group)));
+
+  useEffect(() => {
+    if (userRole !== 'client') return;
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      supabase
+        .from('company_members')
+        .select('role, companies(name)')
+        .eq('user_id', user.id)
+        .limit(1)
+        .single()
+        .then(({ data }) => {
+          if (!data) return;
+          setMemberRole((data.role as string) ?? null);
+          const name = (data.companies as { name: string } | null)?.name ?? null;
+          setCompanyName(name);
+        });
+    });
+  }, [userRole]);
+
+  // Resolve display values
+  const displayName =
+    userRole === 'admin' ?'Admin Récup.'
+      : userRole === 'verifier' ?'Vérificateur' : companyName ??'Chargement…';
+
+  const displaySubtitle =
+    userRole === 'admin' ?'Opérateur'
+      : userRole === 'verifier' ?'ISO 14064-2'
+      : memberRole
+      ? (ROLE_LABELS[memberRole] ?? memberRole)
+      : '…';
+
+  const avatarInitials =
+    userRole === 'admin' ? 'AD' : userRole === 'verifier' ? 'VR' : 'CL';
 
   return (
     <aside
@@ -129,16 +172,16 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         <div className={`flex items-center gap-3 px-3 py-2.5 mt-1 rounded-lg bg-muted ${collapsed ? 'justify-center' : ''}`}>
           <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
             <span className="text-primary-foreground text-xs font-700">
-              {userRole === 'admin' ? 'AD' : userRole === 'verifier' ? 'VR' : 'CL'}
+              {avatarInitials}
             </span>
           </div>
           {!collapsed && (
             <div className="min-w-0">
               <p className="text-sm font-600 text-foreground truncate">
-                {userRole === 'admin' ? 'Admin Récup.' : userRole === 'verifier' ? 'Vérificateur' : 'Client Industrie'}
+                {displayName}
               </p>
               <p className="text-xs text-muted-foreground truncate">
-                {userRole === 'admin' ? 'Opérateur' : userRole === 'verifier' ? 'ISO 14064-2' : 'Chantier Nord'}
+                {displaySubtitle}
               </p>
             </div>
           )}
