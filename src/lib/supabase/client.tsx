@@ -42,6 +42,7 @@ const fromStorage = () => {
 };
 
 const setCookie = (name: string, value: string, options?: any) => {
+  if (typeof document === 'undefined') return;
   let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned`;
   if (options?.maxAge) s += `; Max-Age=${options.maxAge}`;
   if (options?.domain) s += `; Domain=${options.domain}`;
