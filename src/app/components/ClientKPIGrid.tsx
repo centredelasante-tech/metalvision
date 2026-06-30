@@ -37,16 +37,49 @@ export default function ClientKPIGrid() {
   useEffect(() => {
     const supabase = createClient();
 
+    // Build date boundaries anchored to Montreal local time (America/Toronto)
+    // so "début du mois" = minuit heure de Montréal, pas minuit UTC.
+    const TZ = 'America/Toronto';
     const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
-    const monthEnd =
-      month === 12
-        ? `${year + 1}-01-01`
-        : `${year}-${String(month + 1).padStart(2, '0')}-01`;
-    const yearStart = `${year}-01-01`;
-    const yearEnd = `${year + 1}-01-01`;
+
+    // Extract local date components in the Montreal timezone
+    const fmt = (part: Intl.DateTimeFormatPartTypes) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: TZ, [part]: 'numeric' }).format(now);
+
+    const localYear  = parseInt(fmt('year'),  10);
+    const localMonth = parseInt(fmt('month'), 10); // 1–12
+
+    // Determine the UTC offset for Montreal at the start of each boundary
+    // by constructing the boundary moment and letting Date.UTC handle it.
+    // We use a helper: given (y, m, d) in Montreal local time, return ISO string.
+    function montrealMidnightISO(y: number, m: number, d: number): string {
+      // Create a Date that represents midnight Montreal time.
+      // Strategy: build the ISO local string, parse it as UTC, then subtract
+      // the offset that Montreal actually has at that moment.
+      // Simpler: use the fact that Intl can tell us the offset.
+      const candidate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); // noon UTC as probe
+      const localParts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: TZ,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).formatToParts(candidate);
+
+      const get = (type: string) => parseInt(localParts.find(p => p.type === type)?.value ?? '0', 10);
+      // offset in minutes = UTC time - local time (at noon UTC)
+      const localHour = get('hour');
+      const offsetMinutes = 12 * 60 - (localHour * 60); // noon UTC minus local hour (minutes=0,seconds=0)
+
+      // midnight Montreal = UTC midnight + offsetMinutes
+      return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) + offsetMinutes * 60 * 1000).toISOString();
+    }
+
+    const monthStart = montrealMidnightISO(localYear, localMonth, 1);
+    const monthEnd   = localMonth === 12
+      ? montrealMidnightISO(localYear + 1, 1, 1)
+      : montrealMidnightISO(localYear, localMonth + 1, 1);
+    const yearStart  = montrealMidnightISO(localYear, 1, 1);
+    const yearEnd    = montrealMidnightISO(localYear + 1, 1, 1);
 
     Promise.all([
       // 1a. Total lots this month (any status)
