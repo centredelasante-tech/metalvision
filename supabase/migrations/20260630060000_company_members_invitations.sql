@@ -20,15 +20,21 @@ CREATE TYPE public.invitation_status AS ENUM ('pending', 'accepted', 'expired', 
 
 -- ============================================================
 -- 2. TABLES
+-- NOTE: DROP before CREATE because DROP TYPE ... CASCADE may have removed
+--       columns that depend on the enum, making IF NOT EXISTS skip re-creation.
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS public.companies (
+DROP TABLE IF EXISTS public.invitations   CASCADE;
+DROP TABLE IF EXISTS public.company_members CASCADE;
+DROP TABLE IF EXISTS public.companies     CASCADE;
+
+CREATE TABLE public.companies (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS public.company_members (
+CREATE TABLE public.company_members (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id  UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
     user_id     UUID NOT NULL,  -- references auth.users via RLS (no FK to keep public-schema clean)
@@ -37,7 +43,7 @@ CREATE TABLE IF NOT EXISTS public.company_members (
     UNIQUE (company_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS public.invitations (
+CREATE TABLE public.invitations (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id  UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
     email       TEXT NOT NULL,
