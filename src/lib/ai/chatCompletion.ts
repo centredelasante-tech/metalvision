@@ -1,6 +1,11 @@
 import { callAIEndpoint } from './aiClient';
 
-const ENDPOINT = '/api/ai/chat-completion';
+const baseUrl =
+  process.env.NEXT_PUBLIC_APP_URL ??
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ??
+  'http://localhost:4028';
+
+const ENDPOINT = `${baseUrl}/api/ai/chat-completion`;
 
 export async function getChatCompletion(
   provider: string,
