@@ -26,7 +26,6 @@ export default function ManualEntry({ onResult }: ManualEntryProps) {
 
     const supabase = createClient();
 
-    // Get user's company_id
     const { data: memberData } = await supabase
       .from('company_members')
       .select('company_id')
@@ -36,7 +35,6 @@ export default function ManualEntry({ onResult }: ManualEntryProps) {
 
     const userCompanyId = memberData?.company_id ?? null;
 
-    // Query container
     const { data: containers, error } = await supabase
       .from('containers')
       .select('id, name, location, status, company_id, qr_code')
@@ -44,9 +42,8 @@ export default function ManualEntry({ onResult }: ManualEntryProps) {
       .eq('status', 'active')
       .limit(1);
 
-    setLoading(false);
-
     if (error || !containers || containers.length === 0) {
+      setLoading(false);
       onResult(null, 'Conteneur introuvable ou inactif. Vérifiez le code et réessayez.');
       return;
     }
@@ -54,10 +51,46 @@ export default function ManualEntry({ onResult }: ManualEntryProps) {
     const container = containers[0] as ContainerData;
 
     if (userCompanyId && container.company_id !== userCompanyId) {
-      onResult(null, 'Ce conteneur appartient à une autre entreprise. Vous n\'êtes pas autorisé à y accéder.');
+      setLoading(false);
+      onResult(null, "Ce conteneur appartient à une autre entreprise. Vous n'êtes pas autorisé à y accéder.");
       return;
     }
 
+    // GPS avec timeout 10s
+    const getGPS = (): Promise<{ lat: number | null; lng: number | null; accuracy: number | null }> =>
+      new Promise((resolve) => {
+        if (!navigator.geolocation) return resolve({ lat: null, lng: null, accuracy: null });
+        const timer = setTimeout(() => resolve({ lat: null, lng: null, accuracy: null }), 10000);
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            clearTimeout(timer);
+            resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+          },
+          () => {
+            clearTimeout(timer);
+            resolve({ lat: null, lng: null, accuracy: null });
+          }
+        );
+      });
+
+    const gps = await getGPS();
+
+    const { error: scanError } = await supabase.from('scan_events').insert({
+      container_id: container.id,
+      company_id: container.company_id,
+      user_id: user?.id,
+      action_type: 'collecte',
+      gps_lat: gps.lat,
+      gps_lng: gps.lng,
+      gps_accuracy_m: gps.accuracy,
+      scanned_at: new Date().toISOString(),
+    });
+
+    if (scanError) {
+      console.warn('scan_event insertion failed (non-blocking):', scanError);
+    }
+
+    setLoading(false);
     onResult(container, null);
   };
 
