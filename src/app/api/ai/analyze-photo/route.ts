@@ -150,8 +150,8 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
 
     // Strip markdown code fences if present (handles 1, 2 or 3 backticks)
     const jsonStr = rawContent
-      .replace(/^`{1,3}(?:json)?\s*/i, '')
-      .replace(/\s*`{1,3}$/, '')
+      .replace(/^`+(?:json)?\s*/i, '')
+      .replace(/\s*`+$/, '')
       .trim();
 
     let parsed: {
