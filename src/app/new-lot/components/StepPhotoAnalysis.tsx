@@ -113,7 +113,7 @@ export default function StepPhotoAnalysis({ draft, updateDraft, onNext, onBack }
       setProgress(100);
 
       if (!response.ok) {
-        throw new Error(data.error || 'Erreur lors de l\'analyse IA');
+        throw new Error(data.details ? `${data.error}: ${data.details}` : data.error || 'Erreur lors de l\'analyse IA');
       }
 
       const result = data as AIAnalysisResult;
