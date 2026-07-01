@@ -143,7 +143,7 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
           ],
         },
       ],
-      { temperature: 0.2, max_tokens: 1024 }
+      { temperature: 0.2, max_tokens: 2048 }
     );
 
     const rawContent = aiResponse?.choices?.[0]?.message?.content ?? '';
