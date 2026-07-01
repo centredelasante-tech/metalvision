@@ -65,11 +65,13 @@ export default function StepConfirmSubmit({ draft, updateDraft, onBack }: Props)
         height_cm: ai?.height_cm ?? 0,
         depth_cm: ai?.depth_cm ?? 0,
         volume_estimated_m3: draft.volumeM3,
+        weight_kg: draft.weightKg,
         compaction_visual: ai?.compaction_visual ?? null,
         purity_visual: ai?.purity_visual ?? null,
         object_type: ai?.object_type ?? null,
         raw_analysis_json: ai ?? null,
         reference_size_cm: draft.referenceSizeCm,
+        notes: draft.notes || null,
         status: 'submitted',
       });
 
