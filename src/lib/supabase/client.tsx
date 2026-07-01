@@ -1,6 +1,4 @@
-// ... existing code remains the same — no syntax errors found in the file.
-// All browser API accesses (document.cookie, window.location) are already
-// properly guarded with typeof checks. The file is syntactically valid as-is.
+'use client';
 import { createBrowserClient } from '@supabase/ssr';
 
 const PFX = 'sb_';
