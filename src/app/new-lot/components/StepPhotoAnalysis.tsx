@@ -3,6 +3,16 @@ import React, { useState, useRef, useCallback } from 'react';
 import Icon from '@/components/ui/AppIcon';
 import { LotDraft, AIAnalysisResult } from './NewLotWizard';
 
+const METAL_DENSITIES: Record<string, number> = {
+  aluminium: 2700,
+  cuivre: 8960,
+  laiton: 8500,
+  acier: 7850,
+  inox: 8000,
+  fonte: 7200,
+  mélange: 5000,
+};
+
 // Compress image before upload
 async function compressImage(file: File, maxWidthPx = 1280, quality = 0.82): Promise<File> {
   return new Promise((resolve) => {
@@ -107,11 +117,24 @@ export default function StepPhotoAnalysis({ draft, updateDraft, onNext, onBack }
       }
 
       const result = data as AIAnalysisResult;
+
+      // Recalculate estimated_value client-side using local density map
+      // (API receives metal_price_per_kg=0, so estimated_value from API is always 0)
+      const density = METAL_DENSITIES[result.metal_type] ?? 5000;
+      const weightKg = result.weight_kg > 0
+        ? result.weight_kg
+        : result.volume_m3 * density;
+      const correctedResult: AIAnalysisResult = {
+        ...result,
+        weight_kg: Math.round(weightKg * 100) / 100,
+        estimated_value: 0, // no price available client-side; will be set by admin at validation
+      };
+
       updateDraft({
-        aiResult: result,
-        metalType: result.metal_type,
-        volumeM3: result.volume_m3,
-        weightKg: result.weight_kg,
+        aiResult: correctedResult,
+        metalType: correctedResult.metal_type,
+        volumeM3: correctedResult.volume_m3,
+        weightKg: correctedResult.weight_kg,
       });
       setAnalysisState('done');
     } catch (err: unknown) {
