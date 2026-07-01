@@ -124,10 +124,24 @@ export default function StepPhotoAnalysis({ draft, updateDraft, onNext, onBack }
       const weightKg = result.weight_kg > 0
         ? result.weight_kg
         : result.volume_m3 * density;
+      const METAL_PRICES_CA: Record<string, number> = {
+        fer: 0.27,
+        cuivre: 10.90,
+        aluminium: 2.72,
+        acier: 0.35,
+        laiton: 8.50,
+        inox: 3.50,
+        fonte: 0.27,
+        mélange: 1.00,
+      };
+
+      const pricePerKg = METAL_PRICES_CA[result.metal_type] ?? 0;
+      const estimatedValue = Math.round(weightKg * pricePerKg * 100) / 100;
+
       const correctedResult: AIAnalysisResult = {
         ...result,
         weight_kg: Math.round(weightKg * 100) / 100,
-        estimated_value: 0, // no price available client-side; will be set by admin at validation
+        estimated_value: estimatedValue,
       };
 
       updateDraft({
