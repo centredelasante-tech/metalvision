@@ -148,10 +148,10 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
 
     const rawContent = aiResponse?.choices?.[0]?.message?.content ?? '';
 
-    // Strip markdown code fences if present
+    // Strip markdown code fences if present (handles 1, 2 or 3 backticks)
     const jsonStr = rawContent
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '')
+      .replace(/^`{1,3}(?:json)?\s*/i, '')
+      .replace(/\s*`{1,3}$/, '')
       .trim();
 
     let parsed: {
