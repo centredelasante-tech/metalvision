@@ -82,6 +82,51 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
       return;
     }
 
+    // --- GPS + scan_event insertion (non-blocking, 12s total cap) ---
+    const getGPS = (): Promise<{ gps_lat: number | null; gps_lng: number | null; gps_accuracy_m: number | null }> =>
+      new Promise((resolve) => {
+        if (typeof navigator === 'undefined' || !navigator.geolocation) {
+          resolve({ gps_lat: null, gps_lng: null, gps_accuracy_m: null });
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({
+            gps_lat: pos.coords.latitude,
+            gps_lng: pos.coords.longitude,
+            gps_accuracy_m: pos.coords.accuracy ?? null,
+          }),
+          () => resolve({ gps_lat: null, gps_lng: null, gps_accuracy_m: null }),
+          { timeout: 10000, maximumAge: 30000, enableHighAccuracy: false }
+        );
+      });
+
+    const insertScanEvent = async () => {
+      const gpsPromise = getGPS();
+      const { gps_lat, gps_lng, gps_accuracy_m } = await gpsPromise;
+
+      const { error: insertError } = await supabase
+        .from('scan_events')
+        .insert({
+          container_id: container.id,
+          company_id: container.company_id,
+          user_id: user?.id,
+          action_type: 'collecte',
+          gps_lat,
+          gps_lng,
+          gps_accuracy_m,
+          scanned_at: new Date().toISOString(),
+        });
+
+      if (insertError) {
+        console.warn('[scan_event] Insertion failed:', insertError);
+      }
+    };
+
+    const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 12000));
+
+    await Promise.race([insertScanEvent(), timeoutPromise]);
+    // --- end scan_event ---
+
     onResult(container, null);
     setScanState('done');
   }, [user, onResult, stopStream]);
