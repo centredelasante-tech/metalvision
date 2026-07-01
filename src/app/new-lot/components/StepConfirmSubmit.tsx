@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from '@/components/ui/AppIcon';
 import { createClient } from '@/lib/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
 import { LotDraft } from './NewLotWizard';
 
 const METAL_TYPES = [
@@ -25,7 +24,6 @@ interface Props {
 type SubmitState = 'idle' | 'loading' | 'success' | 'error';
 
 export default function StepConfirmSubmit({ draft, updateDraft, onBack }: Props) {
-  const { user } = useAuth();
   const router = useRouter();
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [submitError, setSubmitError] = useState('');
@@ -33,13 +31,20 @@ export default function StepConfirmSubmit({ draft, updateDraft, onBack }: Props)
   const ai = draft.aiResult;
 
   const handleSubmit = async () => {
-    if (!draft.container || !user) return;
-    console.log('Draft before submit:', { container: draft.container, metalType: draft.metalType, user: user?.id });
+    if (!draft.container) return;
     setSubmitState('loading');
     setSubmitError('');
 
     try {
       const supabase = createClient();
+
+      // Récupère l'utilisateur directement depuis Supabase Auth
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        throw new Error('Session expirée. Veuillez vous reconnecter.');
+      }
+
+      console.log('Draft before submit:', { container: draft.container, metalType: draft.metalType, user: user?.id });
 
       // 1. Get company_id from company_members
       const { data: memberData, error: memberError } = await supabase
