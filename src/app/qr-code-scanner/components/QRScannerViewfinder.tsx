@@ -50,7 +50,6 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
 
     const supabase = createClient();
 
-    // Get user's company_id
     const { data: memberData } = await supabase
       .from('company_members')
       .select('company_id')
@@ -60,7 +59,6 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
 
     const userCompanyId = memberData?.company_id ?? null;
 
-    // Query container by qr_code
     const { data: containers, error } = await supabase
       .from('containers')
       .select('id, name, location, status, company_id, qr_code')
@@ -77,55 +75,45 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
     const container = containers[0] as ContainerData;
 
     if (userCompanyId && container.company_id !== userCompanyId) {
-      onResult(null, 'Ce conteneur appartient à une autre entreprise. Vous n\'êtes pas autorisé à y accéder.');
+      onResult(null, "Ce conteneur appartient à une autre entreprise. Vous n'êtes pas autorisé à y accéder.");
       setScanState('done');
       return;
     }
 
-    // --- GPS + scan_event insertion (non-blocking, 12s total cap) ---
-    const getGPS = (): Promise<{ gps_lat: number | null; gps_lng: number | null; gps_accuracy_m: number | null }> =>
+    // Tentative GPS avec timeout 10s
+    const getGPS = (): Promise<{ lat: number | null; lng: number | null; accuracy: number | null }> =>
       new Promise((resolve) => {
-        if (typeof navigator === 'undefined' || !navigator.geolocation) {
-          resolve({ gps_lat: null, gps_lng: null, gps_accuracy_m: null });
-          return;
-        }
+        if (!navigator.geolocation) return resolve({ lat: null, lng: null, accuracy: null });
+        const timer = setTimeout(() => resolve({ lat: null, lng: null, accuracy: null }), 10000);
         navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({
-            gps_lat: pos.coords.latitude,
-            gps_lng: pos.coords.longitude,
-            gps_accuracy_m: pos.coords.accuracy ?? null,
-          }),
-          () => resolve({ gps_lat: null, gps_lng: null, gps_accuracy_m: null }),
-          { timeout: 10000, maximumAge: 30000, enableHighAccuracy: false }
+          (pos) => {
+            clearTimeout(timer);
+            resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+          },
+          () => {
+            clearTimeout(timer);
+            resolve({ lat: null, lng: null, accuracy: null });
+          }
         );
       });
 
-    const insertScanEvent = async () => {
-      const gpsPromise = getGPS();
-      const { gps_lat, gps_lng, gps_accuracy_m } = await gpsPromise;
+    const gps = await getGPS();
 
-      const { error: insertError } = await supabase
-        .from('scan_events')
-        .insert({
-          container_id: container.id,
-          company_id: container.company_id,
-          user_id: user?.id,
-          action_type: 'collecte',
-          gps_lat,
-          gps_lng,
-          gps_accuracy_m,
-          scanned_at: new Date().toISOString(),
-        });
+    // Insertion scan_event — ne bloque jamais onResult en cas d'échec
+    const { error: scanError } = await supabase.from('scan_events').insert({
+      container_id: container.id,
+      company_id: container.company_id,
+      user_id: user?.id,
+      action_type: 'collecte',
+      gps_lat: gps.lat,
+      gps_lng: gps.lng,
+      gps_accuracy_m: gps.accuracy,
+      scanned_at: new Date().toISOString(),
+    });
 
-      if (insertError) {
-        console.warn('[scan_event] Insertion failed:', insertError);
-      }
-    };
-
-    const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 12000));
-
-    await Promise.race([insertScanEvent(), timeoutPromise]);
-    // --- end scan_event ---
+    if (scanError) {
+      console.warn('scan_event insertion failed (non-blocking):', scanError);
+    }
 
     onResult(container, null);
     setScanState('done');
