@@ -148,11 +148,18 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
 
     const rawContent = aiResponse?.choices?.[0]?.message?.content ?? '';
 
-    // Strip markdown code fences if present (handles 1, 2 or 3 backticks)
-    const jsonStr = rawContent
+    // Strip all possible markdown artifacts
+    let jsonStr = rawContent
       .replace(/^`+(?:json)?\s*/i, '')
       .replace(/\s*`+$/, '')
       .trim();
+
+    // If the string starts with { or [, extract just the JSON object
+    const jsonStart = jsonStr.indexOf('{');
+    const jsonEnd = jsonStr.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      jsonStr = jsonStr.slice(jsonStart, jsonEnd + 1);
+    }
 
     let parsed: {
       metal_type: string;
