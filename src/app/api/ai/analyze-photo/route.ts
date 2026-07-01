@@ -121,7 +121,8 @@ FORMAT DE SORTIE (JSON STRICT) :
   "explanation": "..."
 }
 
-IMPORTANT : Réponds UNIQUEMENT avec l'objet JSON — aucun markdown, aucun bloc de code, aucun texte supplémentaire.`;
+IMPORTANT : Réponds UNIQUEMENT avec l'objet JSON — aucun markdown, aucun bloc de code, aucun texte supplémentaire.
+Le champ "explanation" doit contenir une phrase courte maximum (20 mots) résumant l'analyse.`;
 
     const userPrompt = `Analyse cette photo de métal.
 
@@ -143,7 +144,7 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
           ],
         },
       ],
-      { temperature: 0.2, max_tokens: 2048 }
+      { temperature: 0.2, max_tokens: 4096 }
     );
 
     const rawContent = aiResponse?.choices?.[0]?.message?.content ?? '';
