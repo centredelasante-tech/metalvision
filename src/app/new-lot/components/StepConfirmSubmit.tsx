@@ -34,6 +34,7 @@ export default function StepConfirmSubmit({ draft, updateDraft, onBack }: Props)
 
   const handleSubmit = async () => {
     if (!draft.container || !user) return;
+    console.log('Draft before submit:', { container: draft.container, metalType: draft.metalType, user: user?.id });
     setSubmitState('loading');
     setSubmitError('');
 
@@ -83,6 +84,7 @@ export default function StepConfirmSubmit({ draft, updateDraft, onBack }: Props)
       // Redirect after short delay
       setTimeout(() => router.push('/'), 1800);
     } catch (err: unknown) {
+      console.error('Submit error:', err);
       setSubmitError(err instanceof Error ? err.message : 'Erreur inconnue');
       setSubmitState('error');
     }
