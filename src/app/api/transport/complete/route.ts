@@ -11,19 +11,15 @@ const EMISSION_FACTORS: Record<string, number> = {
 // Baseline = same trip by diesel truck
 const BASELINE_EMISSION_FACTOR = 0.062;
 
-async function geocodeAddress(address: string, apiKey: string): Promise<{ lat: number; lng: number }> {
-  const url = `https://api.openrouteservice.org/geocode/search?api_key=${encodeURIComponent(apiKey)}&text=${encodeURIComponent(address)}&boundary.country=CA&size=1`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Geocoding failed for address "${address}": ${response.statusText}`);
-  }
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=ca`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'MetalTrace/1.0 (metaltrace.ca)' }
+  });
+  if (!response.ok) throw new Error(`Geocoding failed: ${response.statusText}`);
   const data = await response.json();
-  const feature = data?.features?.[0];
-  if (!feature) {
-    throw new Error(`No geocoding result found for address "${address}"`);
-  }
-  const [lng, lat] = feature.geometry.coordinates as [number, number];
-  return { lat, lng };
+  if (!data || data.length === 0) throw new Error(`Adresse introuvable: "${address}"`);
+  return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 }
 
 async function calculateDistance(
@@ -92,8 +88,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const apiKey = process.env.OPENROUTESERVICE_API_KEY ?? '';
 
       try {
-        const originCoords = await geocodeAddress(transportRequest.pickup_address, apiKey);
-        const destinationCoords = await geocodeAddress(transportRequest.dropoff_address, apiKey);
+        const originCoords = await geocodeAddress(transportRequest.pickup_address);
+        const destinationCoords = await geocodeAddress(transportRequest.dropoff_address);
         distance_km = await calculateDistance(originCoords, destinationCoords, apiKey);
       } catch (geoError: unknown) {
         const message = geoError instanceof Error ? geoError.message : 'Failed to calculate distance';
