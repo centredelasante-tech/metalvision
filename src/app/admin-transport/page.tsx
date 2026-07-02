@@ -569,7 +569,7 @@ export default function AdminTransportPage() {
         .select(`
           id,
           container_id,
-          metal_type,
+          metal_type_predicted,
           weight_kg,
           created_at,
           containers (
@@ -589,7 +589,7 @@ export default function AdminTransportPage() {
           return {
             id: row.id as string,
             container_id: row.container_id as string | null,
-            metal_type: row.metal_type as string | null,
+            metal_type: row.metal_type_predicted as string | null,
             weight_kg: row.weight_kg as number | null,
             created_at: row.created_at as string,
             container_name: container?.name ?? null,
