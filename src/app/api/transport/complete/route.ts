@@ -24,30 +24,18 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lng: numb
 
 async function calculateDistance(
   origin: { lat: number; lng: number },
-  destination: { lat: number; lng: number },
-  apiKey: string
+  destination: { lat: number; lng: number }
 ): Promise<number> {
-  const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-hgv', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: apiKey,
-    },
-    body: JSON.stringify({
-      coordinates: [
-        [origin.lng, origin.lat],
-        [destination.lng, destination.lat],
-      ],
-    }),
+  const url = `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=false`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'MetalTrace/1.0 (metaltrace.ca)' }
   });
-  if (!response.ok) {
-    throw new Error(`Distance calculation failed: ${response.statusText}`);
-  }
+  if (!response.ok) throw new Error(`Distance calculation failed: ${response.statusText}`);
   const data = await response.json();
-  const distanceMeters: number = data?.routes?.[0]?.summary?.distance;
-  if (distanceMeters == null) {
-    throw new Error('No distance returned from OpenRouteService');
+  if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
+    throw new Error('No route found between these two addresses');
   }
+  const distanceMeters: number = data.routes[0].distance;
   return distanceMeters / 1000;
 }
 
@@ -85,12 +73,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     // Step 2: Calculate distance if not already stored
     if (distance_km == null) {
-      const apiKey = process.env.OPENROUTESERVICE_API_KEY ?? '';
-
       try {
         const originCoords = await geocodeAddress(transportRequest.pickup_address);
         const destinationCoords = await geocodeAddress(transportRequest.dropoff_address);
-        distance_km = await calculateDistance(originCoords, destinationCoords, apiKey);
+        distance_km = await calculateDistance(originCoords, destinationCoords);
       } catch (geoError: unknown) {
         const message = geoError instanceof Error ? geoError.message : 'Failed to calculate distance';
         return NextResponse.json({ error: message }, { status: 502 });
