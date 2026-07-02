@@ -231,7 +231,7 @@ interface CreateTransportModalProps {
 function CreateTransportModal({ lot, onClose, onSuccess }: CreateTransportModalProps) {
   const supabase = createClient();
   const [form, setForm] = useState<CreateTransportForm>({
-    pickup_address: lot.container_location ?? '',
+    pickup_address: '',
     dropoff_address: DEFAULT_DROPOFF,
     transport_mode: 'camion',
     driver_name: '',
@@ -384,7 +384,7 @@ function CreateTransportModal({ lot, onClose, onSuccess }: CreateTransportModalP
               required
               value={form.pickup_address}
               onChange={(e) => handleChange('pickup_address', e.target.value)}
-              placeholder="Ex: 1250 rue Notre-Dame Ouest, Montréal, QC"
+              placeholder="Ex: 1250 rue Notre-Dame Ouest, Montréal, QC H3C 1K4"
               className="w-full px-3 py-2 rounded-lg border border-border bg-input text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
