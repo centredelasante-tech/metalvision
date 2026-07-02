@@ -11,6 +11,50 @@ const EMISSION_FACTORS: Record<string, number> = {
 // Baseline = same trip by diesel truck
 const BASELINE_EMISSION_FACTOR = 0.062;
 
+async function geocodeAddress(address: string, apiKey: string): Promise<{ lat: number; lng: number }> {
+  const url = `https://api.openrouteservice.org/geocode/search?api_key=${encodeURIComponent(apiKey)}&text=${encodeURIComponent(address)}&boundary.country=CA&size=1`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Geocoding failed for address "${address}": ${response.statusText}`);
+  }
+  const data = await response.json();
+  const feature = data?.features?.[0];
+  if (!feature) {
+    throw new Error(`No geocoding result found for address "${address}"`);
+  }
+  const [lng, lat] = feature.geometry.coordinates as [number, number];
+  return { lat, lng };
+}
+
+async function calculateDistance(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  apiKey: string
+): Promise<number> {
+  const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-hgv', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: apiKey,
+    },
+    body: JSON.stringify({
+      coordinates: [
+        [origin.lng, origin.lat],
+        [destination.lng, destination.lat],
+      ],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Distance calculation failed: ${response.statusText}`);
+  }
+  const data = await response.json();
+  const distanceMeters: number = data?.routes?.[0]?.summary?.distance;
+  if (distanceMeters == null) {
+    throw new Error('No distance returned from OpenRouteService');
+  }
+  return distanceMeters / 1000;
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const body = await request.json();
@@ -45,33 +89,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     // Step 2: Calculate distance if not already stored
     if (distance_km == null) {
-      const weight_kg = (transportRequest.weight_tonnes ?? 0) * 1000;
+      const apiKey = process.env.OPENROUTESERVICE_API_KEY ?? '';
 
-      const distanceResponse = await fetch(
-        new URL('/api/transport/calculate-distance', process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000').toString(),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pickup_address: transportRequest.pickup_address,
-            dropoff_address: transportRequest.dropoff_address,
-            weight_kg,
-          }),
-        }
-      );
-
-      if (!distanceResponse.ok) {
-        const errData = await distanceResponse.json().catch(() => ({}));
-        return NextResponse.json(
-          { error: errData?.error ?? 'Failed to calculate distance' },
-          { status: 502 }
-        );
+      try {
+        const originCoords = await geocodeAddress(transportRequest.pickup_address, apiKey);
+        const destinationCoords = await geocodeAddress(transportRequest.dropoff_address, apiKey);
+        distance_km = await calculateDistance(originCoords, destinationCoords, apiKey);
+      } catch (geoError: unknown) {
+        const message = geoError instanceof Error ? geoError.message : 'Failed to calculate distance';
+        return NextResponse.json({ error: message }, { status: 502 });
       }
 
-      const distanceData = await distanceResponse.json();
-      distance_km = distanceData.distance_km;
-      ghg_transport_kgco2e = distanceData.ghg_transport_kgco2e;
-      emission_factor_used = distanceData.emission_factor_used;
+      const weight_tonnes: number = transportRequest.weight_tonnes ?? 0;
+      const transport_mode: string = transportRequest.transport_mode ?? 'camion';
+      emission_factor_used = EMISSION_FACTORS[transport_mode] ?? EMISSION_FACTORS['camion'];
+      ghg_transport_kgco2e = distance_km * weight_tonnes * emission_factor_used;
 
       // Update transport_requests with calculated values
       const { error: updateDistanceError } = await supabase
