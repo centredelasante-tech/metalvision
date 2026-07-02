@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Icon from '@/components/ui/AppIcon';
+import AppLayout from '@/components/AppLayout';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -646,7 +647,7 @@ export default function AdminTransportPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <AppLayout userRole="admin" activeRoute="/admin-transport">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-8">
 
         {/* ── Page Header ── */}
@@ -929,6 +930,6 @@ export default function AdminTransportPage() {
           onSuccess={handleTransportCreated}
         />
       )}
-    </div>
+    </AppLayout>
   );
 }
