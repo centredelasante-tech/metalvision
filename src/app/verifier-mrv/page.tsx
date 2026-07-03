@@ -493,10 +493,15 @@ export default function VerifierMRVPage() {
   // ── Start verification ──────────────────────────────────────────────────────
   const handleStart = async (sessionId: string) => {
     const supabase = createClient();
-    await supabase
+    const { error } = await supabase
       .from('verification_sessions')
       .update({ status: 'in_progress' })
       .eq('id', sessionId);
+    if (error) {
+      console.error('handleStart error:', error.message, error.code);
+      alert('Erreur: ' + error.message);
+      return;
+    }
     fetchSessions();
   };
 
