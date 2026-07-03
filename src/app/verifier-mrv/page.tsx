@@ -403,12 +403,30 @@ export default function VerifierMRVPage() {
     if (!currentUser) return;
     setLoadingSessions(true);
     const supabase = createClient();
-    const { data } = await supabase
-      .from('verification_sessions')
-      .select('*, projects(name, start_date, end_date)')
-      .or(`verifier_contact.eq.${currentUser.email},status.in.(planned,in_progress)`)
-      .order('created_at', { ascending: false });
-    setSessions((data as VerificationSession[]) ?? []);
+
+    const [statusResult, contactResult] = await Promise.all([
+      supabase
+        .from('verification_sessions')
+        .select('*, projects(name, start_date, end_date)')
+        .in('status', ['planned', 'in_progress'])
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('verification_sessions')
+        .select('*, projects(name, start_date, end_date)')
+        .eq('verifier_contact', currentUser.email)
+        .order('created_at', { ascending: false }),
+    ]);
+
+    const merged = [...(statusResult.data ?? []), ...(contactResult.data ?? [])];
+    const seen = new Set<string>();
+    const deduplicated = merged.filter(s => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+    deduplicated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    setSessions(deduplicated as VerificationSession[]);
     setLoadingSessions(false);
   }, [currentUser]);
 
