@@ -1,7 +1,10 @@
-import React from 'react';
+'use client';
+
+import React, { useState, useEffect } from 'react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import MobileBottomNav from './MobileBottomNav';
+import { createClient } from '@/lib/supabase/client';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -12,8 +15,24 @@ interface AppLayoutProps {
 export default function AppLayout({
   children,
   activeRoute = '/',
-  userRole = 'client',
+  userRole: userRoleProp,
 }: AppLayoutProps) {
+  const [userRole, setUserRole] = useState<'client' | 'admin' | 'verifier'>(
+    userRoleProp ?? 'client'
+  );
+
+  useEffect(() => {
+    const fetchRole = async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      const role = user?.app_metadata?.role ?? user?.user_metadata?.role ?? 'client';
+      const normalised: 'client' | 'admin' | 'verifier' =
+        role === 'verifier' ? 'verifier' : role === 'admin' || role === 'project_admin' ? 'admin' : 'client';
+      setUserRole(normalised);
+    };
+    fetchRole();
+  }, []);
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar activeRoute={activeRoute} userRole={userRole} />

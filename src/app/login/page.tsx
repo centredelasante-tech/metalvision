@@ -29,7 +29,16 @@ export default function LoginPage() {
       return;
     }
 
-    router.push('/');
+    const { data: { user } } = await supabase.auth.getUser();
+    const role = user?.app_metadata?.role ?? user?.user_metadata?.role ?? 'client';
+
+    if (role === 'verifier') {
+      router.push('/verifier-mrv');
+    } else if (role === 'admin' || role === 'project_admin') {
+      router.push('/admin-dashboard');
+    } else {
+      router.push('/');
+    }
     router.refresh();
   };
 
