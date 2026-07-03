@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
 import Icon from '@/components/ui/AppIcon';
+import { createClient } from '@/lib/supabase/client';
 
 interface TopbarProps {
   userRole: 'client' | 'admin';
@@ -104,6 +105,20 @@ export default function Topbar({ userRole }: TopbarProps) {
             {userRole === 'admin' ? 'Administrateur' : 'Client'}
           </span>
         </div>
+
+        {/* Logout button */}
+        <button
+          onClick={async () => {
+            const supabase = createClient();
+            await supabase.auth.signOut();
+            router.push('/login');
+          }}
+          className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg btn-ghost text-muted-foreground hover:text-foreground"
+          aria-label="Déconnexion"
+        >
+          <Icon name="ArrowRightOnRectangleIcon" size={18} />
+          <span className="hidden sm:inline text-xs font-600">Déconnexion</span>
+        </button>
       </div>
     </header>
   );
