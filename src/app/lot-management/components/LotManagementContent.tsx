@@ -1,9 +1,12 @@
-import React from 'react';
+'use client';
+import React, { useState } from 'react';
 import LotDetailPanel from './LotDetailPanel';
 import LotListSidebar from './LotListSidebar';
 import ContainersListSection from './ContainersListSection';
 
 export default function LotManagementContent() {
+  const [selectedLotId, setSelectedLotId] = useState<string | undefined>(undefined);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -16,10 +19,10 @@ export default function LotManagementContent() {
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-1">
-          <LotListSidebar />
+          <LotListSidebar selectedId={selectedLotId} onSelectLot={setSelectedLotId} />
         </div>
         <div className="xl:col-span-2">
-          <LotDetailPanel />
+          <LotDetailPanel selectedLotId={selectedLotId} />
         </div>
       </div>
       <ContainersListSection />

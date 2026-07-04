@@ -1,38 +1,101 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import MetalBadge from '@/components/ui/MetalBadge';
 import Icon from '@/components/ui/AppIcon';
+import { createClient } from '@/lib/supabase/client';
 
-const ALL_LOTS = [
-  { id: 'lot-0848', client: 'Chantier Nord SARL', metal: 'cuivre', priceEst: 281.96, status: 'submitted' as const, date: '04/06', urgent: false },
-  { id: 'lot-0847', client: 'Démolition Rhône Est', metal: 'fer', priceEst: 54.00, status: 'submitted' as const, date: '04/06', urgent: false },
-  { id: 'lot-0846', client: 'Acier Industrie SA', metal: 'acier', priceEst: 63.00, status: 'submitted' as const, date: '03/06', urgent: true },
-  { id: 'lot-0845', client: 'BTP Provence SASU', metal: 'aluminium', priceEst: 175.75, status: 'submitted' as const, date: '03/06', urgent: true },
-  { id: 'lot-0844', client: 'Chantier Nord SARL', metal: 'laiton', priceEst: 384.00, status: 'submitted' as const, date: '02/06', urgent: true },
-  { id: 'lot-0843', client: 'Électricité Générale', metal: 'cuivre', priceEst: 127.40, status: 'processed' as const, date: '02/06', urgent: false },
-  { id: 'lot-0842', client: 'Métal & Co SARL', metal: 'inox', priceEst: 134.00, status: 'invoiced' as const, date: '01/06', urgent: false },
-  { id: 'lot-0841', client: 'Chantier Nord SARL', metal: 'fer', priceEst: 96.00, status: 'submitted' as const, date: '01/06', urgent: true },
-  { id: 'lot-0840', client: 'Acier Industrie SA', metal: 'cuivre', priceEst: 125.44, status: 'invoiced' as const, date: '31/05', urgent: false },
-];
+type LotStatus = 'submitted' | 'processed' | 'invoiced';
+
+interface Lot {
+  id: string;
+  lotNumber: string;
+  client: string;
+  metal: string;
+  priceEst: number;
+  status: LotStatus;
+  date: string;
+}
 
 interface Props {
   onSelectLot?: (id: string) => void;
   selectedId?: string;
 }
 
-export default function LotListSidebar({ onSelectLot, selectedId = 'lot-0846' }: Props) {
+export default function LotListSidebar({ onSelectLot, selectedId }: Props) {
+  const [lots, setLots] = useState<Lot[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'submitted' | 'processed' | 'invoiced'>('all');
+  const [filter, setFilter] = useState<'all' | LotStatus>('all');
 
-  const filtered = ALL_LOTS.filter((l) => {
+  useEffect(() => {
+    const supabase = createClient();
+    const fetchLots = async () => {
+      const { data, error } = await supabase
+        .from('raw_measurements')
+        .select('id, metal_type_predicted, volume_estimated_m3, price_paid, status, created_at, company_id, companies(name)')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching lots:', error.message);
+        setLoading(false);
+        return;
+      }
+
+      const mapped: Lot[] = (data ?? []).map((row: any) => {
+        const shortId = row.id.replace(/-/g, '').substring(0, 6).toUpperCase();
+        const rawStatus = row.status as string;
+        const validStatuses: LotStatus[] = ['submitted', 'processed', 'invoiced'];
+        const status: LotStatus = validStatuses.includes(rawStatus as LotStatus)
+          ? (rawStatus as LotStatus)
+          : 'submitted';
+        const dateObj = row.created_at ? new Date(row.created_at) : null;
+        const date = dateObj
+          ? `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}`
+          : '—';
+        const companyName = row.companies?.name ?? '—';
+        return {
+          id: row.id,
+          lotNumber: `LOT-${shortId}`,
+          client: companyName,
+          metal: row.metal_type_predicted ?? 'inconnu',
+          priceEst: Number(row.price_paid ?? 0),
+          status,
+          date,
+        };
+      });
+
+      setLots(mapped);
+      setLoading(false);
+    };
+
+    fetchLots();
+  }, []);
+
+  const filtered = lots.filter((l) => {
     const matchSearch =
-      l.id.includes(search.toLowerCase()) ||
+      l.lotNumber.toLowerCase().includes(search.toLowerCase()) ||
       l.client.toLowerCase().includes(search.toLowerCase()) ||
       l.metal.toLowerCase().includes(search.toLowerCase());
     const matchFilter = filter === 'all' || l.status === filter;
     return matchSearch && matchFilter;
   });
+
+  if (loading) {
+    return (
+      <div className="bg-card rounded-xl border border-border overflow-hidden flex flex-col" style={{ maxHeight: '80vh' }}>
+        <div className="px-4 py-4 border-b border-border space-y-3">
+          <div className="h-9 bg-muted rounded-lg animate-pulse" />
+          <div className="h-8 bg-muted rounded-lg animate-pulse" />
+        </div>
+        <div className="p-4 space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={`skel-${i}`} className="h-16 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden flex flex-col" style={{ maxHeight: '80vh' }}>
@@ -71,10 +134,7 @@ export default function LotListSidebar({ onSelectLot, selectedId = 'lot-0846' }:
             }`}
           >
             <div className="flex items-center justify-between gap-2 mb-1">
-              <div className="flex items-center gap-1.5">
-                {lot.urgent && <Icon name="ExclamationCircleIcon" size={13} className="text-amber-600" />}
-                <span className="text-xs font-700 text-primary tabular-nums">#{lot.id.toUpperCase()}</span>
-              </div>
+              <span className="text-xs font-700 text-primary tabular-nums">#{lot.lotNumber}</span>
               <StatusBadge status={lot.status} size="sm" />
             </div>
             <p className="text-sm font-500 text-foreground truncate">{lot.client}</p>
