@@ -431,9 +431,8 @@ export default function VerifierMRVPage() {
   }, [currentUser]);
 
   // ── Fetch logs (Tab 2) ──────────────────────────────────────────────────────
-  const fetchLogs = useCallback(async () => {
-    if (!currentUser) return;
-    setLoadingLogs(true);
+  const loadActivityLogsData = useCallback(async (): Promise<{ enrichedLogs: ActivityLog[]; obsMap: Record<string, VerifierObservation[]> }> => {
+    if (!currentUser) return { enrichedLogs: [], obsMap: {} };
     const supabase = createClient();
     const { data } = await supabase
       .from('project_activity_logs')
@@ -453,13 +452,13 @@ export default function VerifierMRVPage() {
         .from('transport_requests')
         .select('id, transport_mode, distance_km, ghg_transport_kgco2e')
         .in('id', transportIds);
-      
+
       if (transports) {
         transportMap = Object.fromEntries(
-          transports.map(t => [t.id, { 
-            transport_mode: t.transport_mode, 
-            distance_km: t.distance_km, 
-            ghg_transport_kgco2e: t.ghg_transport_kgco2e 
+          transports.map(t => [t.id, {
+            transport_mode: t.transport_mode,
+            distance_km: t.distance_km,
+            ghg_transport_kgco2e: t.ghg_transport_kgco2e
           }])
         );
       }
@@ -467,14 +466,12 @@ export default function VerifierMRVPage() {
 
     const enrichedLogs = logList.map(l => ({
       ...l,
-      transport_requests: l.related_transport_request_id 
-        ? transportMap[l.related_transport_request_id] ?? null 
+      transport_requests: l.related_transport_request_id
+        ? transportMap[l.related_transport_request_id] ?? null
         : null
     }));
 
-    setLogs(enrichedLogs);
-
-    // Fetch observations for these logs
+    const obsMap: Record<string, VerifierObservation[]> = {};
     if (logList.length > 0) {
       const ids = logList.map(l => l.id);
       const { data: obsData } = await supabase
@@ -482,29 +479,43 @@ export default function VerifierMRVPage() {
         .select('*')
         .in('activity_log_id', ids)
         .eq('verifier_id', currentUser.id);
-      const obsMap: Record<string, VerifierObservation[]> = {};
       for (const obs of (obsData as VerifierObservation[]) ?? []) {
         if (!obsMap[obs.activity_log_id]) obsMap[obs.activity_log_id] = [];
         obsMap[obs.activity_log_id].push(obs);
       }
-      setObservations(obsMap);
     }
-    setLoadingLogs(false);
+
+    return { enrichedLogs, obsMap };
   }, [currentUser]);
 
-  // ── Fetch scan events (Tab 3) ───────────────────────────────────────────────
-  const fetchScanEvents = useCallback(async () => {
+  const fetchLogs = useCallback(async () => {
     if (!currentUser) return;
-    setLoadingScans(true);
+    setLoadingLogs(true);
+    const { enrichedLogs, obsMap } = await loadActivityLogsData();
+    setLogs(enrichedLogs);
+    setObservations(obsMap);
+    setLoadingLogs(false);
+  }, [currentUser, loadActivityLogsData]);
+
+  // ── Fetch scan events (Tab 3) ───────────────────────────────────────────────
+  const loadScanEventsData = useCallback(async (): Promise<ScanEvent[]> => {
+    if (!currentUser) return [];
     const supabase = createClient();
     const { data } = await supabase
       .from('scan_events')
       .select('*, containers(name, qr_code)')
       .order('scanned_at', { ascending: false })
       .limit(300);
-    setScanEvents((data as ScanEvent[]) ?? []);
-    setLoadingScans(false);
+    return (data as ScanEvent[]) ?? [];
   }, [currentUser]);
+
+  const fetchScanEvents = useCallback(async () => {
+    if (!currentUser) return;
+    setLoadingScans(true);
+    const data = await loadScanEventsData();
+    setScanEvents(data);
+    setLoadingScans(false);
+  }, [currentUser, loadScanEventsData]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -541,13 +552,19 @@ export default function VerifierMRVPage() {
     if (!currentUser) return;
     setExportingPdf(true);
     try {
-      const totalReduction = logs.reduce((s, l) => s + (l.ghg_reduction_kgco2e ?? 0), 0);
-      const totalBaseline = logs.reduce((s, l) => s + (l.ghg_emissions_baseline_kgco2e ?? 0), 0);
-      const totalProject = logs.reduce((s, l) => s + (l.ghg_emissions_project_kgco2e ?? 0), 0);
-      const transportLogs = logs.filter(l => l.related_transport_request_id);
-      const traceable = scanEvents.filter(s => s.event_hash).length;
+      // ── Fetch fresh data regardless of which tabs were visited ──────────────
+      const [{ enrichedLogs, obsMap }, scanEventsData] = await Promise.all([
+        loadActivityLogsData(),
+        loadScanEventsData(),
+      ]);
 
-      const allObs: VerifierObservation[] = Object.values(observations).flat();
+      const totalReduction = enrichedLogs.reduce((s, l) => s + (l.ghg_reduction_kgco2e ?? 0), 0);
+      const totalBaseline = enrichedLogs.reduce((s, l) => s + (l.ghg_emissions_baseline_kgco2e ?? 0), 0);
+      const totalProject = enrichedLogs.reduce((s, l) => s + (l.ghg_emissions_project_kgco2e ?? 0), 0);
+      const transportLogs = enrichedLogs.filter(l => l.related_transport_request_id);
+      const traceable = scanEventsData.filter(s => s.event_hash).length;
+
+      const allObs: VerifierObservation[] = Object.values(obsMap).flat();
 
       // ── Fetch completed sessions with comments for the conclusion section ──
       const supabase = createClient();
@@ -562,7 +579,7 @@ export default function VerifierMRVPage() {
       );
 
       const modeStats: Record<string, { count: number; dist: number; baseline: number; project: number; reduction: number }> = {};
-      for (const l of logs) {
+      for (const l of enrichedLogs) {
         const mode = l.transport_requests?.transport_mode ?? 'inconnu';
         if (!modeStats[mode]) modeStats[mode] = { count: 0, dist: 0, baseline: 0, project: 0, reduction: 0 };
         modeStats[mode].count++;
@@ -622,7 +639,7 @@ export default function VerifierMRVPage() {
   <div class="kpi"><div class="kpi-value">${(totalReduction / 1000).toFixed(3)}</div><div class="kpi-label">tCO₂e réduites</div></div>
   <div class="kpi"><div class="kpi-value">${transportLogs.length}</div><div class="kpi-label">Transports vérifiés</div></div>
   <div class="kpi"><div class="kpi-value">${traceable}</div><div class="kpi-label">Lots traçables</div></div>
-  <div class="kpi"><div class="kpi-value">${logs.length}</div><div class="kpi-label">Activités totales</div></div>
+  <div class="kpi"><div class="kpi-value">${enrichedLogs.length}</div><div class="kpi-label">Activités totales</div></div>
 </div>
 
 <h2>Répartition par mode de transport</h2>
@@ -645,7 +662,7 @@ export default function VerifierMRVPage() {
     </tr>`).join('')}
     <tr style="font-weight:bold;background:#f0fdf4">
       <td>TOTAL</td>
-      <td>${logs.length}</td>
+      <td>${enrichedLogs.length}</td>
       <td>—</td>
       <td>${totalBaseline.toFixed(2)}</td>
       <td>${totalProject.toFixed(2)}</td>
