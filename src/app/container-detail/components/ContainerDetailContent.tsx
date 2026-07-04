@@ -4,7 +4,6 @@ import ContainerHeader from './ContainerHeader';
 import ContainerInfoPanel from './ContainerInfoPanel';
 import ContainerQRCode from './ContainerQRCode';
 import SensorPanel from './SensorPanel';
-import ContainerFillChart from './ContainerFillChart';
 import ContainerLotHistory from './ContainerLotHistory';
 import Icon from '@/components/ui/AppIcon';
 import Link from 'next/link';
@@ -64,8 +63,7 @@ export default function ContainerDetailContent({ container }: ContainerDetailCon
 
         {/* Right columns */}
         <div className="xl:col-span-2 space-y-4 md:space-y-5">
-          <ContainerFillChart />
-          <ContainerLotHistory />
+          <ContainerLotHistory containerId={container.id} />
         </div>
       </div>
     </div>
