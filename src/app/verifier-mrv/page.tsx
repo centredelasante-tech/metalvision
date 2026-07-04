@@ -549,6 +549,18 @@ export default function VerifierMRVPage() {
 
       const allObs: VerifierObservation[] = Object.values(observations).flat();
 
+      // ── Fetch completed sessions with comments for the conclusion section ──
+      const supabase = createClient();
+      const { data: completedSessionsData } = await supabase
+        .from('verification_sessions')
+        .select('*, projects(name, start_date, end_date)')
+        .eq('status', 'completed')
+        .not('comments', 'is', null)
+        .order('created_at', { ascending: false });
+      const completedSessions: VerificationSession[] = (completedSessionsData ?? []).filter(
+        (s: VerificationSession) => s.comments && s.comments.trim() !== ''
+      );
+
       const modeStats: Record<string, { count: number; dist: number; baseline: number; project: number; reduction: number }> = {};
       for (const l of logs) {
         const mode = l.transport_requests?.transport_mode ?? 'inconnu';
@@ -587,6 +599,9 @@ export default function VerifierMRVPage() {
   .conforme { color: #166534; }
   .non_conforme { color: #991b1b; }
   .a_clarifier { color: #92400e; }
+  .conclusion-item { margin-bottom: 8px; padding: 8px; background: #f0fdf4; border-left: 3px solid #059669; border-radius: 4px; }
+  .conclusion-org { font-size: 10px; font-weight: bold; color: #166534; }
+  .conclusion-project { font-size: 10px; color: #6b7280; margin-bottom: 4px; }
   .signature { margin-top: 40px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb; }
   .sig-line { margin-top: 8px; font-size: 11px; color: #374151; }
   .footer { margin-top: 32px; font-size: 10px; color: #9ca3af; text-align: center; }
@@ -648,6 +663,17 @@ ${allObs.length === 0 ? '<p style="color:#6b7280">Aucune observation enregistré
   <p style="margin:2px 0 0;color:#9ca3af;font-size:10px">${new Date(o.created_at).toLocaleString('fr-CA')}</p>
 </div>`).join('')}
 
+<h2>Conclusion de la vérification (${completedSessions.length})</h2>
+${completedSessions.length === 0
+  ? '<p style="color:#6b7280">Aucune session de vérification clôturée avec commentaire.</p>'
+  : completedSessions.map(cs => `
+<div class="conclusion-item">
+  <div class="conclusion-org">${cs.verifier_org ?? 'Organisation non renseignée'}</div>
+  ${cs.projects?.name ? `<div class="conclusion-project">Projet : ${cs.projects.name}</div>` : ''}
+  <p style="margin:4px 0 0">${cs.comments}</p>
+  ${cs.report_url ? `<p style="margin:4px 0 0;font-size:10px"><a href="${cs.report_url}" style="color:#059669">Voir le rapport officiel</a></p>` : ''}
+</div>`).join('')}
+
 <div class="signature">
   <strong>Signature électronique</strong>
   <div class="sig-line">Vérificateur : ${currentUser.email}</div>
@@ -666,8 +692,9 @@ ${allObs.length === 0 ? '<p style="color:#6b7280">Aucune observation enregistré
       a.download = `rapport-mrv-${dateStr}.html`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // silent
+    } catch (err) {
+      console.error('Erreur export PDF:', err);
+      alert('Une erreur est survenue lors de la génération du rapport. Veuillez réessayer.');
     }
     setExportingPdf(false);
   };
