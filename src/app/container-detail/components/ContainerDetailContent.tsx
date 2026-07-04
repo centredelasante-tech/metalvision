@@ -3,7 +3,6 @@ import React from 'react';
 import ContainerHeader from './ContainerHeader';
 import ContainerInfoPanel from './ContainerInfoPanel';
 import ContainerQRCode from './ContainerQRCode';
-import SensorPanel from './SensorPanel';
 import ContainerLotHistory from './ContainerLotHistory';
 import Icon from '@/components/ui/AppIcon';
 import Link from 'next/link';
@@ -58,7 +57,6 @@ export default function ContainerDetailContent({ container }: ContainerDetailCon
           <div className="max-w-[200px] mx-auto xl:max-w-none">
             <ContainerQRCode container={container} />
           </div>
-          <SensorPanel />
         </div>
 
         {/* Right columns */}
