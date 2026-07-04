@@ -1,17 +1,41 @@
 import React from 'react';
 import Icon from '@/components/ui/AppIcon';
 
-const INFO_ROWS = [
-  { label: 'Identifiant', value: 'CT-003', icon: 'IdentificationIcon' },
-  { label: 'Entreprise', value: 'Acier Industrie SA', icon: 'BuildingOfficeIcon' },
-  { label: 'Localisation', value: 'Zone C — Stockage, Bâtiment 3', icon: 'MapPinIcon' },
-  { label: 'Type', value: 'Benne 10 m³', icon: 'ArchiveBoxIcon' },
-  { label: 'Capteur', value: 'Ultrason · ID SEN-042', icon: 'SignalIcon' },
-  { label: 'Créé le', value: '12/01/2026', icon: 'CalendarIcon' },
-  { label: 'Dernière collecte', value: '15/05/2026', icon: 'TruckIcon' },
-];
+interface Container {
+  id: string;
+  qr_code: string;
+  name: string;
+  location: string | null;
+  status: string;
+  created_at: string;
+  company_id: string;
+}
 
-export default function ContainerInfoPanel() {
+interface ContainerInfoPanelProps {
+  container: Container;
+}
+
+export default function ContainerInfoPanel({ container }: ContainerInfoPanelProps) {
+  const formattedDate = container.created_at
+    ? new Date(container.created_at).toLocaleDateString('fr-CA', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : '—';
+
+  const statusLabel =
+    container.status === 'active' ? 'Actif' :
+    container.status === 'inactive' ? 'Inactif' : 'Maintenance';
+
+  const INFO_ROWS = [
+    { label: 'Identifiant', value: container.qr_code, icon: 'IdentificationIcon' },
+    { label: 'Nom', value: container.name, icon: 'ArchiveBoxIcon' },
+    { label: 'Localisation', value: container.location ?? '—', icon: 'MapPinIcon' },
+    { label: 'Statut', value: statusLabel, icon: 'CheckCircleIcon' },
+    { label: 'Créé le', value: formattedDate, icon: 'CalendarIcon' },
+  ];
+
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       <div className="px-5 py-4 border-b border-border">
