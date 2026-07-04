@@ -437,11 +437,42 @@ export default function VerifierMRVPage() {
     const supabase = createClient();
     const { data } = await supabase
       .from('project_activity_logs')
-      .select('*, projects(name), transport_requests(transport_mode, distance_km, ghg_transport_kgco2e)')
+      .select('*, projects(name)')
       .order('timestamp', { ascending: false })
       .limit(200);
     const logList = (data as ActivityLog[]) ?? [];
-    setLogs(logList);
+
+    const transportIds = logList
+      .map(l => l.related_transport_request_id)
+      .filter(Boolean) as string[];
+
+    let transportMap: Record<string, { transport_mode: string | null; distance_km: number | null; ghg_transport_kgco2e: number | null }> = {};
+
+    if (transportIds.length > 0) {
+      const { data: transports } = await supabase
+        .from('transport_requests')
+        .select('id, transport_mode, distance_km, ghg_transport_kgco2e')
+        .in('id', transportIds);
+      
+      if (transports) {
+        transportMap = Object.fromEntries(
+          transports.map(t => [t.id, { 
+            transport_mode: t.transport_mode, 
+            distance_km: t.distance_km, 
+            ghg_transport_kgco2e: t.ghg_transport_kgco2e 
+          }])
+        );
+      }
+    }
+
+    const enrichedLogs = logList.map(l => ({
+      ...l,
+      transport_requests: l.related_transport_request_id 
+        ? transportMap[l.related_transport_request_id] ?? null 
+        : null
+    }));
+
+    setLogs(enrichedLogs);
 
     // Fetch observations for these logs
     if (logList.length > 0) {
