@@ -53,7 +53,7 @@ export default function ContainerGrid() {
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
         <h2 className="text-sm font-600 text-foreground">Mes conteneurs</h2>
-        <Link href="/container-detail" className="text-xs text-primary font-600 hover:underline">
+        <Link href="/lot-management" className="text-xs text-primary font-600 hover:underline">
           Voir tout
         </Link>
       </div>
@@ -91,7 +91,7 @@ export default function ContainerGrid() {
           {containers.map((c) => (
             <Link
               key={c.id}
-              href="/container-detail"
+              href={`/container-detail/${c.id}`}
               className="flex items-center gap-3 px-5 py-3.5 row-hover transition-colors"
             >
               <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-muted">

@@ -1,6 +1,7 @@
 import React from 'react';
 import LotDetailPanel from './LotDetailPanel';
 import LotListSidebar from './LotListSidebar';
+import ContainersListSection from './ContainersListSection';
 
 export default function LotManagementContent() {
   return (
@@ -21,6 +22,7 @@ export default function LotManagementContent() {
           <LotDetailPanel />
         </div>
       </div>
+      <ContainersListSection />
     </div>
   );
 }

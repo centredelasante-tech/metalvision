@@ -17,7 +17,7 @@ const clientNav: NavItem[] = [
   { label: 'Tableau de bord', href: '/', icon: 'HomeIcon', group: 'principal' },
   { label: 'Scanner QR', href: '/qr-code-scanner', icon: 'QrCodeIcon', group: 'principal' },
   { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon', group: 'principal' },
-  { label: 'Mes conteneurs', href: '/container-detail', icon: 'ArchiveBoxIcon', group: 'principal' },
+  { label: 'Mes conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'principal' },
   { label: 'Suivi transport', href: '/transport-tracking', icon: 'TruckIcon', group: 'transport' },
   { label: 'Impact Carbone', href: '/carbon-impact', icon: 'CloudIcon', group: 'carbone' },
 ];
@@ -25,7 +25,7 @@ const clientNav: NavItem[] = [
 const adminNav: NavItem[] = [
   { label: 'Tableau de bord', href: '/admin-dashboard', icon: 'ChartBarIcon', group: 'principal' },
   { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badge: 7, group: 'opérations' },
-  { label: 'Conteneurs', href: '/container-detail', icon: 'ArchiveBoxIcon', group: 'opérations' },
+  { label: 'Conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'opérations' },
   { label: 'Clients', href: '/', icon: 'BuildingOfficeIcon', group: 'opérations' },
   { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badge: 3, group: 'finance' },
