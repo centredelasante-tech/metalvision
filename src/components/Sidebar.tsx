@@ -9,7 +9,7 @@ interface NavItem {
   label: string;
   href: string;
   icon: string;
-  badge?: number;
+  badgeKey?: 'lots' | 'factures';
   group?: string;
 }
 
@@ -24,11 +24,11 @@ const clientNav: NavItem[] = [
 
 const adminNav: NavItem[] = [
   { label: 'Tableau de bord', href: '/admin-dashboard', icon: 'ChartBarIcon', group: 'principal' },
-  { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badge: 7, group: 'opérations' },
+  { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badgeKey: 'lots', group: 'opérations' },
   { label: 'Conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'opérations' },
   { label: 'Clients', href: '/', icon: 'BuildingOfficeIcon', group: 'opérations' },
   { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
-  { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badge: 3, group: 'finance' },
+  { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badgeKey: 'factures', group: 'finance' },
   { label: 'Prix métaux', href: '/', icon: 'CurrencyEuroIcon', group: 'finance' },
   { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
   { label: 'Facteurs GES', href: '/admin-emission-factors', icon: 'BeakerIcon', group: 'mrv' },
@@ -53,6 +53,7 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [companyName, setCompanyName] = useState<string | null>(null);
   const [memberRole, setMemberRole] = useState<string | null>(null);
+  const [submittedLotsCount, setSubmittedLotsCount] = useState<number>(0);
 
   const navItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
   const groups = Array.from(new Set(navItems.map((n) => n.group)));
@@ -76,6 +77,25 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         });
     });
   }, [userRole]);
+
+  useEffect(() => {
+    if (userRole !== 'admin') return;
+    const supabase = createClient();
+    supabase
+      .from('raw_measurements')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'submitted')
+      .then(({ count }) => {
+        setSubmittedLotsCount(count ?? 0);
+      });
+  }, [userRole]);
+
+  const getBadgeValue = (badgeKey?: 'lots' | 'factures'): number | undefined => {
+    if (!badgeKey) return undefined;
+    if (badgeKey === 'lots') return submittedLotsCount;
+    if (badgeKey === 'factures') return 0;
+    return undefined;
+  };
 
   // Resolve display values
   const displayName =
@@ -120,6 +140,7 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
               .filter((n) => n.group === group)
               .map((item) => {
                 const isActive = activeRoute === item.href;
+                const badgeValue = getBadgeValue(item.badgeKey);
                 return (
                   <Link
                     key={`nav-${item.href}-${item.label}`}
@@ -138,14 +159,14 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
                     {!collapsed && (
                       <>
                         <span className="truncate">{item.label}</span>
-                        {item.badge !== undefined && (
+                        {badgeValue !== undefined && badgeValue > 0 && (
                           <span className="ml-auto bg-accent text-accent-foreground text-[11px] font-700 px-1.5 py-0.5 rounded-full tabular-nums">
-                            {item.badge}
+                            {badgeValue}
                           </span>
                         )}
                       </>
                     )}
-                    {collapsed && item.badge !== undefined && (
+                    {collapsed && badgeValue !== undefined && badgeValue > 0 && (
                       <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
                     )}
                   </Link>
