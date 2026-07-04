@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import MobileBottomNav from './MobileBottomNav';
@@ -17,9 +18,11 @@ export default function AppLayout({
   activeRoute = '/',
   userRole: userRoleProp,
 }: AppLayoutProps) {
+  const router = useRouter();
   const [userRole, setUserRole] = useState<'client' | 'admin' | 'verifier'>(
     userRoleProp ?? 'client'
   );
+  const [checkingAccess, setCheckingAccess] = useState(true);
 
   useEffect(() => {
     const fetchRole = async () => {
@@ -29,9 +32,29 @@ export default function AppLayout({
       const normalised: 'client' | 'admin' | 'verifier' =
         role === 'verifier' ? 'verifier' : role === 'admin' || role === 'project_admin' ? 'admin' : 'client';
       setUserRole(normalised);
+
+      const roleRoutes: Record<'client' | 'admin' | 'verifier', string> = {
+        verifier: '/verifier-mrv',
+        admin: '/admin-dashboard',
+        client: '/',
+      };
+
+      if (userRoleProp && normalised !== userRoleProp) {
+        router.replace(roleRoutes[normalised]);
+        return;
+      }
+      setCheckingAccess(false);
     };
     fetchRole();
   }, []);
+
+  if (checkingAccess) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
