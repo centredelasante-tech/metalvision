@@ -11,12 +11,24 @@ interface KPIData {
   loading: boolean;
 }
 
+interface CopperState {
+  value: string;
+  trend: 'up' | 'down' | 'neutral';
+  loading: boolean;
+}
+
 export default function AdminKPIGrid() {
   const [kpi, setKpi] = useState<KPIData>({
     lotsEnAttente: 0,
     lotsTraitesAujourdhui: 0,
     avgConfidence: null,
     confidenceCount: 0,
+    loading: true,
+  });
+
+  const [copper, setCopper] = useState<CopperState>({
+    value: '...',
+    trend: 'neutral',
     loading: true,
   });
 
@@ -70,6 +82,29 @@ export default function AdminKPIGrid() {
     };
 
     fetchKPIs();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchCopper() {
+      try {
+        const res = await fetch('/api/metals-price');
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.metals)) {
+          const entry = data.metals.find((m: { label: string; price: number | null; available: boolean; trend: 'up' | 'down' | 'neutral' }) => m.label === 'Cuivre');
+          if (entry && entry.available && entry.price !== null) {
+            setCopper({ value: `${entry.price.toFixed(2)} $CA`, trend: entry.trend, loading: false });
+          } else {
+            setCopper({ value: 'N/D', trend: 'neutral', loading: false });
+          }
+        }
+      } catch {
+        if (!cancelled) setCopper({ value: 'N/D', trend: 'neutral', loading: false });
+      }
+    }
+    fetchCopper();
+    return () => { cancelled = true; };
   }, []);
 
   if (kpi.loading) {
@@ -138,10 +173,10 @@ export default function AdminKPIGrid() {
       />
       <MetricCard
         label="Prix index cuivre"
-        value="7,42 $CA"
-        subValue="par kg · valeur statique"
+        value={copper.value}
+        subValue={copper.loading ? '' : `par kg`}
         icon="ArrowTrendingUpIcon"
-        trend="up"
+        trend={copper.trend === 'up' ? 'up' : copper.trend === 'down' ? 'down' : 'up'}
         trendLabel="Indicatif · LME"
         variant="default"
       />
