@@ -1,5 +1,5 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
 import Icon from '@/components/ui/AppIcon';
@@ -9,22 +9,49 @@ interface TopbarProps {
   userRole: 'client' | 'admin';
 }
 
-const METAL_PRICES = [
-  { metal: 'Fer', price: '0,27 $CA/kg', trend: 'up' },
-  { metal: 'Cuivre', price: '10,90 $CA/kg', trend: 'up' },
-  { metal: 'Aluminium', price: '2,72 $CA/kg', trend: 'down' },
-  { metal: 'Acier', price: '0,35 $CA/kg', trend: 'neutral' },
-];
+interface MetalPrice {
+  label: string;
+  price: number | null;
+  trend: 'up' | 'down' | 'neutral';
+  available: boolean;
+}
 
 export default function Topbar({ userRole }: TopbarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
+  const [metalPrices, setMetalPrices] = useState<MetalPrice[]>([]);
+  const [pricesLoading, setPricesLoading] = useState(true);
   const router = useRouter();
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchPrices() {
+      try {
+        const res = await fetch('/api/metals-price');
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.metals)) {
+          setMetalPrices(data.metals);
+        }
+      } catch {
+        // silently fail — ticker stays empty
+      } finally {
+        if (!cancelled) setPricesLoading(false);
+      }
+    }
+    fetchPrices();
+    return () => { cancelled = true; };
+  }, []);
 
   const notifications = [
     { id: 'notif-1', text: 'Lot #LOT-0847 traité — 127,40 €', time: 'Il y a 12 min', type: 'success' },
     { id: 'notif-2', text: 'Conteneur CT-014 à 92% de capacité', time: 'Il y a 1h', type: 'warning' },
     { id: 'notif-3', text: 'Facture FAC-0234 envoyée', time: 'Il y a 3h', type: 'info' },
   ];
+
+  function formatPrice(price: number | null, available: boolean): string {
+    if (!available || price === null) return 'N/D';
+    return `${price.toFixed(2)} $CA/kg`;
+  }
 
   return (
     <header className="h-14 md:h-16 bg-card border-b border-border flex items-center px-3 md:px-6 gap-3 flex-shrink-0 z-10">
@@ -47,17 +74,23 @@ export default function Topbar({ userRole }: TopbarProps) {
           <Icon name="ArrowTrendingUpIcon" size={14} />
           <span className="font-600 uppercase tracking-wide">Prix du jour</span>
         </div>
-        {METAL_PRICES.map((mp) => (
-          <div key={`ticker-${mp.metal}`} className="flex items-center gap-1.5">
-            <span className="text-xs font-600 text-foreground">{mp.metal}</span>
-            <span className="text-xs tabular-nums text-muted-foreground">{mp.price}</span>
-            <Icon
-              name={mp.trend === 'up' ? 'ArrowUpIcon' : mp.trend === 'down' ? 'ArrowDownIcon' : 'MinusIcon'}
-              size={12}
-              className={mp.trend === 'up' ? 'text-green-600' : mp.trend === 'down' ? 'text-red-500' : 'text-muted-foreground'}
-            />
-          </div>
-        ))}
+        {pricesLoading ? (
+          <span className="text-xs text-muted-foreground">...</span>
+        ) : (
+          metalPrices.map((mp) => (
+            <div key={`ticker-${mp.label}`} className="flex items-center gap-1.5">
+              <span className="text-xs font-600 text-foreground">{mp.label}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{formatPrice(mp.price, mp.available)}</span>
+              {mp.available && (
+                <Icon
+                  name={mp.trend === 'up' ? 'ArrowUpIcon' : mp.trend === 'down' ? 'ArrowDownIcon' : 'MinusIcon'}
+                  size={12}
+                  className={mp.trend === 'up' ? 'text-green-600' : mp.trend === 'down' ? 'text-red-500' : 'text-muted-foreground'}
+                />
+              )}
+            </div>
+          ))
+        )}
       </div>
 
       <div className="flex-1 lg:hidden" />
