@@ -16,10 +16,55 @@ interface MetalPrice {
   available: boolean;
 }
 
+interface Notification {
+  id: string;
+  text: string;
+  time: string;
+  type: 'success' | 'warning' | 'info';
+}
+
+function getRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'À l\'instant';
+  if (diffMin < 60) return `Il y a ${diffMin} min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `Il y a ${diffH}h`;
+  const diffD = Math.floor(diffH / 24);
+  return `Il y a ${diffD}j`;
+}
+
+function buildNotificationText(row: {
+  status: string;
+  official_metal_type: string | null;
+  metal_type_predicted: string | null;
+  weight_kg: number | null;
+  official_weight_kg: number | null;
+  price_paid: number | null;
+}): { text: string; type: 'success' | 'warning' | 'info' } {
+  const metal = row.official_metal_type ?? row.metal_type_predicted ?? 'Métal';
+  const weight = row.official_weight_kg ?? row.weight_kg;
+  const weightStr = weight != null ? ` — ${Number(weight).toFixed(1)} kg` : '';
+
+  if (row.status === 'invoiced') {
+    const priceStr = row.price_paid != null ? ` — ${Number(row.price_paid).toFixed(2)} $CA` : '';
+    return { text: `Mesure ${metal} facturée${weightStr}${priceStr}`, type: 'success' };
+  }
+  if (row.status === 'processed') {
+    return { text: `Mesure ${metal} traitée${weightStr}`, type: 'info' };
+  }
+  // submitted
+  return { text: `Nouvelle mesure ${metal} soumise${weightStr}`, type: 'warning' };
+}
+
 export default function Topbar({ userRole }: TopbarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [metalPrices, setMetalPrices] = useState<MetalPrice[]>([]);
   const [pricesLoading, setPricesLoading] = useState(true);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifLoading, setNotifLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
@@ -42,11 +87,42 @@ export default function Topbar({ userRole }: TopbarProps) {
     return () => { cancelled = true; };
   }, []);
 
-  const notifications = [
-    { id: 'notif-1', text: 'Lot #LOT-0847 traité — 127,40 €', time: 'Il y a 12 min', type: 'success' },
-    { id: 'notif-2', text: 'Conteneur CT-014 à 92% de capacité', time: 'Il y a 1h', type: 'warning' },
-    { id: 'notif-3', text: 'Facture FAC-0234 envoyée', time: 'Il y a 3h', type: 'info' },
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchNotifications() {
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from('raw_measurements')
+          .select('id, status, official_metal_type, metal_type_predicted, weight_kg, official_weight_kg, price_paid, created_at')
+          .order('created_at', { ascending: false })
+          .limit(5);
+
+        if (!cancelled) {
+          if (error || !data || data.length === 0) {
+            setNotifications([]);
+          } else {
+            const built: Notification[] = data.map((row) => {
+              const { text, type } = buildNotificationText(row);
+              return {
+                id: row.id,
+                text,
+                time: getRelativeTime(row.created_at),
+                type,
+              };
+            });
+            setNotifications(built);
+          }
+        }
+      } catch {
+        if (!cancelled) setNotifications([]);
+      } finally {
+        if (!cancelled) setNotifLoading(false);
+      }
+    }
+    fetchNotifications();
+    return () => { cancelled = true; };
+  }, []);
 
   function formatPrice(price: number | null, available: boolean): string {
     if (!available || price === null) return 'N/D';
@@ -105,24 +181,34 @@ export default function Topbar({ userRole }: TopbarProps) {
             aria-label="Notifications"
           >
             <Icon name="BellIcon" size={20} className="text-muted-foreground" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-accent rounded-full" />
+            {notifications.length > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-accent rounded-full" />
+            )}
           </button>
 
           {notifOpen && (
             <div className="absolute right-0 top-12 w-[calc(100vw-2rem)] sm:w-80 bg-card border border-border rounded-xl shadow-modal z-50 overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                 <span className="text-sm font-600">Notifications</span>
-                <span className="text-xs text-accent font-600 cursor-pointer">Tout marquer lu</span>
+                {notifications.length > 0 && (
+                  <span className="text-xs text-accent font-600 cursor-pointer">Tout marquer lu</span>
+                )}
               </div>
-              {notifications.map((n) => (
-                <div key={n.id} className="flex items-start gap-3 px-4 py-3 row-hover border-b border-border last:border-0 cursor-pointer">
-                  <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${n.type === 'success' ? 'bg-primary' : n.type === 'warning' ? 'bg-accent' : 'bg-blue-500'}`} />
-                  <div className="min-w-0">
-                    <p className="text-sm text-foreground">{n.text}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{n.time}</p>
+              {notifLoading ? (
+                <div className="px-4 py-6 text-center text-xs text-muted-foreground">Chargement...</div>
+              ) : notifications.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-muted-foreground">Aucune notification récente</div>
+              ) : (
+                notifications.map((n) => (
+                  <div key={n.id} className="flex items-start gap-3 px-4 py-3 row-hover border-b border-border last:border-0 cursor-pointer">
+                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${n.type === 'success' ? 'bg-primary' : n.type === 'warning' ? 'bg-accent' : 'bg-blue-500'}`} />
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground">{n.text}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{n.time}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           )}
         </div>
