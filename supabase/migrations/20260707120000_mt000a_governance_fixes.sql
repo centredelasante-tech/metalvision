@@ -3,6 +3,8 @@
 -- ============================================================
 --
 -- CHANGEMENTS :
+--   0. is_platform_superadmin() : redéfinie ici pour garantir l'existence
+--      de la fonction avant toute utilisation dans ce fichier
 --   1. aggregator_admins_superadmin_all : FOR ALL → SELECT + INSERT + UPDATE
 --      (DELETE physique interdit pour le super-admin plateforme)
 --   2. is_aggregator_primary_admin(UUID) : nouvelle fonction helper
@@ -14,6 +16,21 @@
 --   5. operational_units_aggregator_admin_select : SELECT uniquement pour
 --      l'admin de regroupement sur les unités opérationnelles de ses membres
 -- ============================================================
+
+-- ════════════════════════════════════════════════════════════
+-- 0. PRÉREQUIS : is_platform_superadmin()
+--    Redéfinie ici pour garantir l'existence de la fonction
+--    même si la migration 20260707110100 n'a pas encore été appliquée.
+-- ════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION public.is_platform_superadmin()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+$$;
 
 -- ════════════════════════════════════════════════════════════
 -- 1. FONCTION : is_aggregator_primary_admin(UUID)
