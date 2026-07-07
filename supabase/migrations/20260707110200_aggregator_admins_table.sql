@@ -63,7 +63,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_aggregator_admins_active_role
 -- Source de vérité : public.aggregator_admins UNIQUEMENT.
 -- Ne consulte JAMAIS company_members.role.
 -- Ne confère AUCUN droit à project_admin.
-DROP FUNCTION IF EXISTS public.is_aggregator_admin(UUID);
+DROP FUNCTION IF EXISTS public.is_aggregator_admin(UUID) CASCADE;
 CREATE OR REPLACE FUNCTION public.is_aggregator_admin(p_aggregator_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
