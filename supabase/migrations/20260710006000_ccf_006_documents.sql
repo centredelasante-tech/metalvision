@@ -80,22 +80,17 @@ CREATE POLICY "documents_project_select"
         visibility = 'project'
         AND (
             -- Membre de l'organisation propriétaire
+            -- Note : la clause participant actif (project_participants) est définie
+            -- dans ccf_006b, après la création de la table project_participants (ccf_005).
             public.is_organization_member(owner_org_id)
-            OR
-            -- Participant actif au projet lié (via object_type = 'project')
-            (
-                object_type = 'project'
-                AND EXISTS (
-                    SELECT 1 FROM public.project_participants pp
-                    WHERE pp.project_id = documents.object_id
-                      AND public.is_organization_member(pp.organization_id)
-                      AND pp.status = 'active'
-                )
-            )
         )
     );
 
--- confidential : seuls le déposant (org propriétaire) et le coordinateur du projet
+-- confidential : MVP-RA-027 — accès restreint selon le contexte métier de l'objet
+-- NOTE : La clause object_type = 'project' (ccf_projects) est définie dans ccf_006b
+--        pour garantir que public.ccf_projects existe avant d'être référencé.
+-- NOTE : La clause object_type = 'mandate' (mandates) est également définie dans ccf_006b
+--        pour éviter toute dépendance circulaire ou d'ordre d'exécution.
 DROP POLICY IF EXISTS "documents_confidential_select" ON public.documents;
 CREATE POLICY "documents_confidential_select"
     ON public.documents
@@ -104,18 +99,20 @@ CREATE POLICY "documents_confidential_select"
     USING (
         visibility = 'confidential'
         AND (
-            -- Membre de l'organisation propriétaire (déposant)
+            -- Le déposant (organisation propriétaire) voit toujours son propre document
             public.is_organization_member(owner_org_id)
-            OR
-            -- Admin de l'organisation coordinatrice du projet lié
-            (
-                object_type = 'project'
+            OR (
+                object_type = 'opportunity'
                 AND EXISTS (
-                    SELECT 1 FROM public.ccf_projects p
-                    WHERE p.id = documents.object_id
-                      AND public.is_organization_member(p.coordinator_org_id)
+                    SELECT 1 FROM public.opportunities o
+                    WHERE o.id = documents.object_id
+                      AND public.is_organization_member(o.coordinator_org_id)
                 )
             )
+            -- 'organization' et 'capability' : couverts par la première clause (owner_org_id) seule.
+            -- 'project' : clause coordinateur définie dans ccf_006b (après ccf_005).
+            -- 'mandate' : clause émetteur/récepteur définie dans ccf_006b (après ccf_003).
+            -- 'value_report' : couverture en attente — voir note ci-dessous.
         )
     );
 
