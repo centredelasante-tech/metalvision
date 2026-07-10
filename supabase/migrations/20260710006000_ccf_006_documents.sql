@@ -15,6 +15,10 @@
 --   ccf_004 (opportunities)
 --   ccf_005 (ccf_projects, project_participants)
 --   ccf_009 (is_platform_superadmin)
+--
+-- NOTE : La policy "documents_project_select" (qui référence project_participants)
+--        est définie dans ccf_006b (20260710006100) pour garantir que la table
+--        project_participants existe déjà au moment de la validation de la policy.
 -- ============================================================
 
 -- ════════════════════════════════════════════════════════════
@@ -97,29 +101,12 @@ CREATE POLICY "documents_org_private_select"
         AND public.is_organization_member(owner_org_id)
     );
 
--- project : propriétaire OU participant actif du projet lié
--- MVP-RA-025 : un participant actif (project_participants) peut lire
--- les documents de portée projet attachés à son projet.
-DROP POLICY IF EXISTS "documents_project_select" ON public.documents;
-CREATE POLICY "documents_project_select"
-    ON public.documents
-    FOR SELECT
-    TO authenticated
-    USING (
-        visibility = 'project'
-        AND (
-            public.is_organization_member(owner_org_id)
-            OR (
-                object_type = 'project'
-                AND EXISTS (
-                    SELECT 1 FROM public.project_participants pp
-                    WHERE pp.project_id = documents.object_id
-                      AND public.is_organization_member(pp.organization_id)
-                      AND pp.status = 'active'
-                )
-            )
-        )
-    );
+-- NOTE : "documents_project_select" est défini dans ccf_006b
+-- (20260710006100_ccf_006b_documents_project_policy.sql)
+-- car il référence public.project_participants créée dans ccf_005.
+-- PostgreSQL valide les références de tables dans les policies RLS
+-- au moment du parsing — la policy doit donc être créée après
+-- que la table project_participants existe dans la base.
 
 -- confidential : MVP-RA-027 — accès restreint selon le contexte métier de l'objet
 -- 5 branches :
