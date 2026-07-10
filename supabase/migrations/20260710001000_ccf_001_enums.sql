@@ -6,6 +6,9 @@
 --   RT-05 : Pas d'ENUM générique "status". Chaque table gouvernée
 --            utilise une colonne TEXT + CHECK (status IN (...)).
 --            Seuls les types stables et non conflictuels sont des ENUMs.
+--            NOTE : public.ccf_project_phase a été RETIRÉ de ce fichier
+--            conformément à la décision 4 (aucun ENUM Postgres partagé —
+--            ccf_projects.phase est traité en TEXT + CHECK dans ccf_005).
 --   RT-01/RT-02 : La table "projects" (domaine MRV ISO 14064) et son
 --            ENUM "project_status" existants ne sont PAS touchés.
 --            Le domaine collaboratif utilise la table "ccf_projects".
@@ -41,20 +44,7 @@ CREATE TYPE public.document_visibility AS ENUM (
     'confidential'
 );
 
--- ── 3. ccf_project_phase ─────────────────────────────────────
--- Phase opérationnelle d'un projet collaboratif CCF.
--- Nommé "ccf_project_phase" pour éviter tout conflit avec
--- un éventuel "project_phase" futur dans le domaine MRV.
-DROP TYPE IF EXISTS public.ccf_project_phase CASCADE;
-CREATE TYPE public.ccf_project_phase AS ENUM (
-    'draft',
-    'active',
-    'execution',
-    'review',
-    'closed'
-);
-
--- ── 4. logistics_step_type ───────────────────────────────────
+-- ── 3. logistics_step_type ───────────────────────────────────
 -- Type d'étape logistique dans un projet CCF.
 DROP TYPE IF EXISTS public.logistics_step_type CASCADE;
 CREATE TYPE public.logistics_step_type AS ENUM (
@@ -66,7 +56,7 @@ CREATE TYPE public.logistics_step_type AS ENUM (
     'preuve_finale'
 );
 
--- ── 5. ccf_event_type ────────────────────────────────────────
+-- ── 4. ccf_event_type ────────────────────────────────────────
 -- Catalogue fermé des 17 types d'événements métier CCF.
 -- Nommé "ccf_event_type" pour éviter tout conflit avec
 -- le domaine MRV/scan existant.
@@ -91,6 +81,14 @@ CREATE TYPE public.ccf_event_type AS ENUM (
     'value_report_generated'
 );
 
+-- ── NOTE : ccf_project_phase retiré ──────────────────────────
+-- L'ENUM public.ccf_project_phase a été retiré de ce fichier.
+-- ccf_projects.phase est implémenté en TEXT + CHECK dans ccf_005,
+-- conformément à la décision 4 (RT-05) : aucun ENUM Postgres partagé
+-- pour les statuts/phases — ccf_projects.phase était explicitement
+-- nommé dans la liste des champs à traiter en TEXT + CHECK.
+-- La suppression du type est gérée par DROP TYPE IF EXISTS dans ccf_005.
+
 -- ── NOTE : Statuts fermés ─────────────────────────────────────
 -- Les statuts des tables gouvernées sont implémentés comme
 -- TEXT + CHECK (status IN (...)) dans chaque migration de table,
@@ -104,6 +102,7 @@ CREATE TYPE public.ccf_event_type AS ENUM (
 --   capabilities         : draft, declared, qualified, suspended, archived
 --   opportunities        : draft, qualified, converted, closed, archived
 --   ccf_projects.status  : draft, active, paused, closed, archived
+--   ccf_projects.phase   : draft, active, execution, review, closed  (TEXT+CHECK)
 --   project_participants : invited, active, declined, removed
 --   documents            : draft, submitted, approved, rejected, archived
 --   logistics_steps      : planned, in_progress, completed, blocked, cancelled

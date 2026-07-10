@@ -6,19 +6,20 @@
 --   RT-03 : companies = organizations dans le domaine collaboratif.
 --            La table "companies" existante est RENOMMÉE en "organizations"
 --            et "company_members" en "organization_members".
---            Ordre non négociable : 1a → 1b → 1c → 1d.
+--            Ordre non négociable : 1a → 1a-bis → 1b → 1c → 1d.
 --
 -- ORDRE D'EXÉCUTION DANS CETTE MIGRATION :
---   1a. Renommer tables et type ENUM
---   1b. Ajouter nouvelles colonnes (AVANT de toucher aux valeurs d'enum)
---   1c. Recopier la notion "terrain" dans operational_profile
---       (AVANT de renommer les valeurs d'enum)
---   1d. Renommer les valeurs d'enum
---   2.  Créer la table profiles
---   3.  Adapter les fonctions helper existantes
---   4.  Créer les alias minces pour le domaine CCF
---   5.  Indexes
---   6.  RLS sur les nouvelles tables
+--   1a.     Renommer tables et type ENUM
+--   1a-bis. Renommer la colonne "role" en "org_role" dans organization_members
+--   1b.     Ajouter nouvelles colonnes (AVANT de toucher aux valeurs d'enum)
+--   1c.     Recopier la notion "terrain" dans operational_profile
+--           (AVANT de renommer les valeurs d'enum)
+--   1d.     Renommer les valeurs d'enum
+--   2.      Créer la table profiles
+--   3.      Adapter les fonctions helper existantes
+--   4.      Créer les alias minces pour le domaine CCF
+--   5.      Indexes
+--   6.      RLS sur les nouvelles tables
 --
 -- IMPORTANT : Les fonctions is_company_member(), is_company_owner(),
 --   company_has_no_members() sont CONSERVÉES sous leurs noms originaux
@@ -34,6 +35,17 @@
 ALTER TABLE IF EXISTS public.companies RENAME TO organizations;
 ALTER TABLE IF EXISTS public.company_members RENAME TO organization_members;
 ALTER TYPE IF EXISTS public.company_member_role RENAME TO org_role;
+
+-- ════════════════════════════════════════════════════════════
+-- ÉTAPE 1a-bis — Renommer la colonne "role" en "org_role"
+-- CRITIQUE : doit être exécuté APRÈS le renommage du type (1a)
+--            et AVANT l'ajout de colonnes (1b) et le UPDATE (1c).
+--            Sans ce renommage, la colonne s'appellerait "role"
+--            alors que le type s'appelle "org_role" — incohérence
+--            de nomenclature et risque de confusion dans les fonctions.
+-- ════════════════════════════════════════════════════════════
+
+ALTER TABLE public.organization_members RENAME COLUMN role TO org_role;
 
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 1b — Ajouter nouvelles colonnes
@@ -64,11 +76,13 @@ ALTER TABLE public.organization_members
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 1c — Recopier la notion "terrain" dans operational_profile
 -- CRITIQUE : doit être exécuté AVANT le renommage des valeurs d'enum (1d)
+-- La colonne s'appelle maintenant "org_role" (renommée en 1a-bis).
+-- La valeur 'terrain' existe encore dans l'enum à ce stade.
 -- ════════════════════════════════════════════════════════════
 
 UPDATE public.organization_members
     SET operational_profile = 'terrain'
-    WHERE role = 'terrain';
+    WHERE org_role = 'terrain';
 
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 1d — Renommer les valeurs d'enum
@@ -125,7 +139,8 @@ CREATE TRIGGER on_auth_user_created_profile
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 3 — Adapter les fonctions helper existantes
 -- Les noms sont CONSERVÉS pour ne pas casser les policies existantes.
--- Seul le corps est mis à jour pour pointer vers les tables renommées.
+-- Seul le corps est mis à jour pour pointer vers les tables renommées
+-- et la colonne renommée (org_role au lieu de role).
 -- ════════════════════════════════════════════════════════════
 
 -- is_company_member() — pointe maintenant vers organization_members
@@ -157,7 +172,7 @@ AS $$
         FROM public.organization_members om
         WHERE om.organization_id = p_company_id
           AND om.user_id = auth.uid()
-          AND om.role = 'admin'
+          AND om.org_role = 'admin'
     );
 $$;
 
@@ -211,7 +226,7 @@ AS $$
         FROM public.organization_members om
         WHERE om.organization_id = p_org_id
           AND om.user_id = auth.uid()
-          AND om.role = 'admin'
+          AND om.org_role = 'admin'
           AND om.status = 'active'
     );
 $$;
@@ -254,38 +269,10 @@ CREATE POLICY "profiles_self_all"
     USING (id = auth.uid())
     WITH CHECK (id = auth.uid());
 
--- Le super-admin plateforme peut lire tous les profils
+-- Super-admin plateforme : lecture complète des profils
 DROP POLICY IF EXISTS "profiles_superadmin_select" ON public.profiles;
 CREATE POLICY "profiles_superadmin_select"
     ON public.profiles
     FOR SELECT
     TO authenticated
     USING (public.is_platform_superadmin());
-
--- Les membres d'une même organisation peuvent se voir mutuellement
-DROP POLICY IF EXISTS "profiles_org_member_select" ON public.profiles;
-CREATE POLICY "profiles_org_member_select"
-    ON public.profiles
-    FOR SELECT
-    TO authenticated
-    USING (
-        EXISTS (
-            SELECT 1
-            FROM public.organization_members om1
-            JOIN public.organization_members om2
-                ON om1.organization_id = om2.organization_id
-            WHERE om1.user_id = auth.uid()
-              AND om2.user_id = profiles.id
-              AND om1.status = 'active'
-              AND om2.status = 'active'
-        )
-    );
-
--- ── NOTE sur operational_profile ─────────────────────────────
--- operational_profile est un axe fonctionnel ORTHOGONAL à org_role.
--- Il ne confère aucune autorité par lui-même.
--- Usages :
---   1. Filtre UX : interface terrain simplifiée vs interface bureau
---   2. Condition additionnelle dans certaines policies RLS
---      (ex: logistics_steps — voir migration 010)
--- Il ne remplace jamais org_role comme source de permission.
