@@ -120,53 +120,87 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- 4. TRIGGERS D'AUDIT sur les tables gouvernées CCF
 -- ════════════════════════════════════════════════════════════
+-- NOTE : Les DROP TRIGGER sont enveloppés dans des blocs DO avec
+-- EXCEPTION WHEN undefined_table THEN NULL pour éviter une erreur
+-- si la table cible n'existe pas encore (migration fraîche).
+-- ════════════════════════════════════════════════════════════
 
-DROP TRIGGER IF EXISTS audit_organizations ON public.organizations;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_organizations ON public.organizations;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_organizations
     AFTER INSERT OR UPDATE OR DELETE ON public.organizations
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_organization_members ON public.organization_members;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_organization_members ON public.organization_members;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_organization_members
     AFTER INSERT OR UPDATE OR DELETE ON public.organization_members
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_mandates ON public.mandates;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_mandates ON public.mandates;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_mandates
     AFTER INSERT OR UPDATE OR DELETE ON public.mandates
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_ccf_projects ON public.ccf_projects;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_ccf_projects ON public.ccf_projects;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_ccf_projects
     AFTER INSERT OR UPDATE OR DELETE ON public.ccf_projects
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_project_participants ON public.project_participants;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_project_participants ON public.project_participants;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_project_participants
     AFTER INSERT OR UPDATE OR DELETE ON public.project_participants
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_documents ON public.documents;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_documents ON public.documents;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_documents
     AFTER INSERT OR UPDATE OR DELETE ON public.documents
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_logistics_steps ON public.logistics_steps;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_logistics_steps ON public.logistics_steps;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_logistics_steps
     AFTER INSERT OR UPDATE OR DELETE ON public.logistics_steps
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_value_reports ON public.value_reports;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_value_reports ON public.value_reports;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_value_reports
     AFTER INSERT OR UPDATE OR DELETE ON public.value_reports
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_capabilities ON public.capabilities;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_capabilities ON public.capabilities;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_capabilities
     AFTER INSERT OR UPDATE OR DELETE ON public.capabilities
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
-DROP TRIGGER IF EXISTS audit_opportunities ON public.opportunities;
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS audit_opportunities ON public.opportunities;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 CREATE TRIGGER audit_opportunities
     AFTER INSERT OR UPDATE OR DELETE ON public.opportunities
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
