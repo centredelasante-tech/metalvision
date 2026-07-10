@@ -95,13 +95,24 @@ ALTER TABLE public.opportunity_capabilities ENABLE ROW LEVEL SECURITY;
 
 -- ── capabilities ─────────────────────────────────────────────
 
--- SELECT : l'organisation propriétaire peut lire ses capacités
+-- SELECT : l'organisation propriétaire peut lire ses capacités,
+--          ET un coordinateur d'opportunité peut voir les capacités
+--          candidates associées à son opportunité (liaison active).
 DROP POLICY IF EXISTS "capabilities_owner_select" ON public.capabilities;
 CREATE POLICY "capabilities_owner_select"
     ON public.capabilities
     FOR SELECT
     TO authenticated
-    USING (public.is_organization_member(organization_id));
+    USING (
+        public.is_organization_member(organization_id)
+        OR EXISTS (
+            SELECT 1 FROM public.opportunity_capabilities oc
+            JOIN public.opportunities o ON o.id = oc.opportunity_id
+            WHERE oc.capability_id = capabilities.id
+              AND oc.status = 'active'
+              AND public.is_organization_member(o.coordinator_org_id)
+        )
+    );
 
 -- INSERT : seul un admin de l'organisation peut déclarer une capacité
 DROP POLICY IF EXISTS "capabilities_owner_admin_insert" ON public.capabilities;
@@ -130,13 +141,24 @@ CREATE POLICY "capabilities_superadmin_select"
 
 -- ── opportunities ─────────────────────────────────────────────
 
--- SELECT : l'organisation coordinatrice peut lire ses opportunités
+-- SELECT : l'organisation coordinatrice peut lire ses opportunités,
+--          ET une organisation candidate peut voir l'opportunité à
+--          laquelle sa capacité est associée (liaison active).
 DROP POLICY IF EXISTS "opportunities_coordinator_select" ON public.opportunities;
 CREATE POLICY "opportunities_coordinator_select"
     ON public.opportunities
     FOR SELECT
     TO authenticated
-    USING (public.is_organization_member(coordinator_org_id));
+    USING (
+        public.is_organization_member(coordinator_org_id)
+        OR EXISTS (
+            SELECT 1 FROM public.opportunity_capabilities oc
+            JOIN public.capabilities c ON c.id = oc.capability_id
+            WHERE oc.opportunity_id = opportunities.id
+              AND oc.status = 'active'
+              AND public.is_organization_member(c.organization_id)
+        )
+    );
 
 -- INSERT : seul un admin de l'organisation coordinatrice peut créer
 DROP POLICY IF EXISTS "opportunities_coordinator_admin_insert" ON public.opportunities;
@@ -185,7 +207,7 @@ CREATE POLICY "opp_cap_member_select"
         )
     );
 
--- INSERT/UPDATE : admin de l'organisation coordinatrice de l'opportunité
+-- INSERT : admin de l'organisation coordinatrice de l'opportunité
 DROP POLICY IF EXISTS "opp_cap_coordinator_admin_insert" ON public.opportunity_capabilities;
 CREATE POLICY "opp_cap_coordinator_admin_insert"
     ON public.opportunity_capabilities
@@ -198,3 +220,33 @@ CREATE POLICY "opp_cap_coordinator_admin_insert"
               AND public.is_organization_owner(o.coordinator_org_id)
         )
     );
+
+-- UPDATE : admin de l'organisation coordinatrice peut mettre à jour
+--          fit_score (après évaluation) ou passer status à 'removed'
+DROP POLICY IF EXISTS "opp_cap_coordinator_admin_update" ON public.opportunity_capabilities;
+CREATE POLICY "opp_cap_coordinator_admin_update"
+    ON public.opportunity_capabilities
+    FOR UPDATE
+    TO authenticated
+    USING (
+        EXISTS (
+            SELECT 1 FROM public.opportunities o
+            WHERE o.id = opportunity_id
+              AND public.is_organization_owner(o.coordinator_org_id)
+        )
+    )
+    WITH CHECK (
+        EXISTS (
+            SELECT 1 FROM public.opportunities o
+            WHERE o.id = opportunity_id
+              AND public.is_organization_owner(o.coordinator_org_id)
+        )
+    );
+
+-- Super-admin : lecture complète
+DROP POLICY IF EXISTS "opp_cap_superadmin_select" ON public.opportunity_capabilities;
+CREATE POLICY "opp_cap_superadmin_select"
+    ON public.opportunity_capabilities
+    FOR SELECT
+    TO authenticated
+    USING (public.is_platform_superadmin());
