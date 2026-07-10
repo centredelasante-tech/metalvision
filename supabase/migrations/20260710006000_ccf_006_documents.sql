@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS public.documents (
 -- ════════════════════════════════════════════════════════════
 
 ALTER TABLE public.documents
+    DROP CONSTRAINT IF EXISTS documents_project_visibility_requires_project_object;
+
+ALTER TABLE public.documents
     ADD CONSTRAINT documents_project_visibility_requires_project_object
     CHECK (
         visibility <> 'project'
