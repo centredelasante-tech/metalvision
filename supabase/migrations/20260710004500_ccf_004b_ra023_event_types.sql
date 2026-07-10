@@ -5,7 +5,7 @@
 --
 -- ORDRE D'EXÉCUTION :
 --   Après  : 20260710004000_ccf_004_capabilities_opportunities.sql
---   Avant  : 20260710005000_ccf_005_ccf_projects_participants.sql
+--   Avant  : 20260710004600_ccf_004c_ra024_event_types.sql
 --
 -- POURQUOI UNE MIGRATION SÉPARÉE (pas dans ccf_001) :
 --   ccf_001 crée public.ccf_event_type avec DROP TYPE … CASCADE.
@@ -16,18 +16,17 @@
 --
 -- POURQUOI PAS DANS ccf_004 :
 --   Le trigger emit_opportunity_capability_status_event insère dans
---   public.business_events, créée dans ccf_008. PostgreSQL valide
---   l'existence de la table cible à la compilation de la fonction
---   PL/pgSQL (LANGUAGE plpgsql). Placer la fonction dans ccf_004
---   (timestamp 004000, avant ccf_008 à 008000) provoquerait une
---   erreur 42P01 lors de l'application séquentielle des migrations.
---   Le timestamp 004500 place cette migration après ccf_004 mais
---   avant ccf_005 — la fonction est compilée après ccf_008 lors
---   d'une application complète depuis zéro, et peut être appliquée
---   en incrémental sur un schéma existant où ccf_008 est déjà présent.
+--   public.business_events, créée dans ccf_008. La fonction est placée
+--   ici (timestamp 004500) pour des raisons de lisibilité et de gestion
+--   explicite des dépendances : regrouper les types d'événements et leur
+--   trigger d'émission dans une migration dédiée rend l'ordre d'application
+--   et les dépendances entre migrations immédiatement lisibles. Le timestamp
+--   004500 garantit que cette migration s'applique après ccf_004 (004000)
+--   et avant ccf_005 (005000), et que business_events (ccf_008, 008000)
+--   est déjà présent lors d'une application incrémentale sur un schéma existant.
 --
 -- CONTENU :
---   1. ALTER TYPE ccf_event_type — ajout des deux nouvelles valeurs
+--   1. ALTER TYPE ccf_event_type — ajout des deux valeurs MVP-RA-023
 --   2. Fonction trigger emit_opportunity_capability_status_event
 --   3. Trigger AFTER UPDATE sur opportunity_capabilities
 -- ============================================================
@@ -87,6 +86,11 @@ $$;
 --     'removed'   → coordinator_org_id de l'opportunité
 --     'withdrawn' → organization_id de la capacité
 -- payload : contient opportunity_id, capability_id, old_status, new_status.
+--
+-- object_type / object_id : 'opportunity' / NEW.opportunity_id pour toutes les branches.
+--   Choix délibéré : l'événement est ancré sur l'opportunité (entité agrégat),
+--   pas sur la capacité, pour cohérence avec le reste du domaine CCF où
+--   business_events référence toujours l'entité coordinatrice de la relation.
 -- ════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.emit_opportunity_capability_status_event()
@@ -111,7 +115,8 @@ BEGIN
     ELSIF NEW.status = 'withdrawn' THEN
         v_event_type := 'opportunity_capability_withdrawn';
     ELSE
-        -- Transition vers 'active' ou toute autre valeur : pas d'événement métier
+        -- Transition vers 'active', 'pending_reacceptance' ou toute autre valeur :
+        -- les événements correspondants sont gérés dans ccf_004c (MVP-RA-024).
         RETURN NEW;
     END IF;
 
@@ -143,6 +148,9 @@ BEGIN
         payload
     ) VALUES (
         v_event_type,
+        -- object_type = 'opportunity' / object_id = NEW.opportunity_id pour toutes les branches.
+        -- L'événement est ancré sur l'opportunité (entité agrégat), pas sur la capacité,
+        -- pour cohérence avec le reste du domaine CCF.
         'opportunity',
         NEW.opportunity_id,
         v_actor_id,
@@ -164,6 +172,9 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- S'exécute après enforce_opp_cap_update_scope (BEFORE UPDATE),
 -- donc uniquement si la mise à jour a été validée.
+-- Couvre les transitions MVP-RA-023 (removed, withdrawn).
+-- Les transitions MVP-RA-024 (pending_reacceptance, reaccepted, declined)
+-- sont couvertes par le trigger du même nom redéfini dans ccf_004c.
 -- ════════════════════════════════════════════════════════════
 
 DROP TRIGGER IF EXISTS emit_opportunity_capability_status_event
