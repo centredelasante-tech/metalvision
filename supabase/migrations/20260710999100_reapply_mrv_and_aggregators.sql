@@ -1,3 +1,5 @@
+BEGIN;
+
 -- ============================================================
 -- RÉAPPLICATION MRV + DOMAINE AGRÉGATEURS
 -- Migration: 20260710999100_reapply_mrv_and_aggregators.sql
@@ -119,6 +121,10 @@ CREATE INDEX IF NOT EXISTS idx_verification_sessions_project_id ON public.verifi
 CREATE INDEX IF NOT EXISTS idx_emission_factors_category ON public.emission_factors(category);
 
 -- ── 1.4 HELPER FUNCTIONS (before RLS) ────────────────────────
+-- Définitions sécurisées via auth.jwt() -> 'app_metadata'.
+-- Ces fonctions sont définies ici, avant l'activation RLS (1.5) et les
+-- policies (1.6) qui les référencent. is_platform_admin() et
+-- is_admin_from_auth() sont définis en Section 3 (non dupliqués ici).
 
 CREATE OR REPLACE FUNCTION public.is_project_admin()
 RETURNS BOOLEAN
@@ -126,16 +132,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'project_admin'
-      OR au.raw_user_meta_data->>'role' = 'admin'
-      OR au.raw_app_meta_data->>'role' = 'project_admin'
-      OR au.raw_app_meta_data->>'role' = 'admin'
-    )
-  )
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_verifier()
@@ -144,14 +141,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'verifier'
-      OR au.raw_app_meta_data->>'role' = 'verifier'
-    )
-  )
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') = 'verifier'
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_project_client()
@@ -160,16 +150,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'project_client'
-      OR au.raw_user_meta_data->>'role' = 'client'
-      OR au.raw_app_meta_data->>'role' = 'project_client'
-      OR au.raw_app_meta_data->>'role' = 'client'
-    )
-  )
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_client', 'client')
 $$;
 
 -- ── 1.5 ENABLE RLS ───────────────────────────────────────────
@@ -333,18 +314,18 @@ END $$;
 -- Elles sont requises par 20260707110200 et 20260707110300.
 -- ════════════════════════════════════════════════════════════
 
--- ── 2.1 Ajout de la colonne aggregator_id sur companies ──────
--- La table companies existe déjà (créée par 20260630060000).
+-- ── 2.1 Ajout de la colonne aggregator_id sur organizations ──
+-- La table organizations existe (créée par ccf_002 / RT-03).
 -- On ajoute aggregator_id si elle n'existe pas encore.
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name   = 'companies'
+      AND table_name   = 'organizations'
       AND column_name  = 'aggregator_id'
   ) THEN
-    ALTER TABLE public.companies ADD COLUMN aggregator_id UUID;
+    ALTER TABLE public.organizations ADD COLUMN aggregator_id UUID;
   END IF;
 END $$;
 
@@ -357,30 +338,30 @@ CREATE TABLE IF NOT EXISTS public.aggregators (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- FK : companies.aggregator_id → aggregators.id
+-- FK : organizations.aggregator_id → aggregators.id
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
     WHERE constraint_schema = 'public'
-      AND table_name        = 'companies'
-      AND constraint_name   = 'fk_companies_aggregator_id'
+      AND table_name        = 'organizations'
+      AND constraint_name   = 'fk_organizations_aggregator_id'
   ) THEN
-    ALTER TABLE public.companies
-      ADD CONSTRAINT fk_companies_aggregator_id
+    ALTER TABLE public.organizations
+      ADD CONSTRAINT fk_organizations_aggregator_id
       FOREIGN KEY (aggregator_id) REFERENCES public.aggregators(id) ON DELETE SET NULL;
   END IF;
 END $$;
 
 -- ── 2.3 TABLE : operational_units ────────────────────────────
 CREATE TABLE IF NOT EXISTS public.operational_units (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id  UUID        NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-    name        TEXT        NOT NULL,
-    description TEXT,
-    location    TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID        NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name            TEXT        NOT NULL,
+    description     TEXT,
+    location        TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- FK : projects.operational_unit_id → operational_units.id
@@ -452,33 +433,33 @@ CREATE TABLE IF NOT EXISTS public.distribution_rules (
 CREATE TABLE IF NOT EXISTS public.member_distribution_overrides (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     aggregator_id   UUID        NOT NULL REFERENCES public.aggregators(id) ON DELETE CASCADE,
-    company_id      UUID        NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+    organization_id UUID        NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     override_ratio  FLOAT8      NOT NULL CHECK (override_ratio >= 0 AND override_ratio <= 1),
     reason          TEXT,
     effective_from  DATE        NOT NULL DEFAULT CURRENT_DATE,
     effective_to    DATE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (aggregator_id, company_id, effective_from)
+    UNIQUE (aggregator_id, organization_id, effective_from)
 );
 
 -- ── 2.9 TABLE : credit_sale_allocations ──────────────────────
 CREATE TABLE IF NOT EXISTS public.credit_sale_allocations (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    credit_sale_id  UUID        NOT NULL REFERENCES public.credit_sales(id) ON DELETE CASCADE,
-    company_id      UUID        NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
-    allocated_tco2e FLOAT8      NOT NULL CHECK (allocated_tco2e > 0),
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    credit_sale_id   UUID        NOT NULL REFERENCES public.credit_sales(id) ON DELETE CASCADE,
+    organization_id  UUID        NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
+    allocated_tco2e  FLOAT8      NOT NULL CHECK (allocated_tco2e > 0),
     allocated_amount FLOAT8,
-    currency        TEXT        NOT NULL DEFAULT 'CAD',
-    status          TEXT        NOT NULL DEFAULT 'pending'
-                                CHECK (status IN ('pending', 'paid', 'disputed')),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    currency         TEXT        NOT NULL DEFAULT 'CAD',
+    status           TEXT        NOT NULL DEFAULT 'pending'
+                                 CHECK (status IN ('pending', 'paid', 'disputed')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ── 2.10 INDEXES ─────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_aggregators_id ON public.aggregators(id);
-CREATE INDEX IF NOT EXISTS idx_operational_units_company_id ON public.operational_units(company_id);
+CREATE INDEX IF NOT EXISTS idx_operational_units_organization_id ON public.operational_units(organization_id);
 CREATE INDEX IF NOT EXISTS idx_credit_lots_project_id ON public.credit_lots(project_id);
 CREATE INDEX IF NOT EXISTS idx_credit_lots_status ON public.credit_lots(status);
 CREATE INDEX IF NOT EXISTS idx_credit_sales_aggregator_id ON public.credit_sales(aggregator_id);
@@ -486,26 +467,20 @@ CREATE INDEX IF NOT EXISTS idx_credit_sale_lots_sale_id ON public.credit_sale_lo
 CREATE INDEX IF NOT EXISTS idx_credit_sale_lots_lot_id ON public.credit_sale_lots(credit_lot_id);
 CREATE INDEX IF NOT EXISTS idx_distribution_rules_aggregator_id ON public.distribution_rules(aggregator_id);
 CREATE INDEX IF NOT EXISTS idx_mdo_aggregator_id ON public.member_distribution_overrides(aggregator_id);
-CREATE INDEX IF NOT EXISTS idx_mdo_company_id ON public.member_distribution_overrides(company_id);
+CREATE INDEX IF NOT EXISTS idx_mdo_organization_id ON public.member_distribution_overrides(organization_id);
 CREATE INDEX IF NOT EXISTS idx_csa_sale_id ON public.credit_sale_allocations(credit_sale_id);
-CREATE INDEX IF NOT EXISTS idx_csa_company_id ON public.credit_sale_allocations(company_id);
-CREATE INDEX IF NOT EXISTS idx_companies_aggregator_id ON public.companies(aggregator_id);
+CREATE INDEX IF NOT EXISTS idx_csa_organization_id ON public.credit_sale_allocations(organization_id);
+CREATE INDEX IF NOT EXISTS idx_organizations_aggregator_id ON public.organizations(aggregator_id);
 CREATE INDEX IF NOT EXISTS idx_projects_operational_unit_id ON public.projects(operational_unit_id);
 
 
 -- ════════════════════════════════════════════════════════════
 -- SECTION 3 — FONCTIONS RLS HELPER (DOMAINE PLATEFORME)
 -- Source : 20260707110000_document_is_platform_admin.sql
+-- Note : is_project_admin(), is_verifier(), is_project_client() sont
+-- définis en Section 1.4 (avant les policies RLS qui les utilisent).
+-- Seules is_platform_admin() et is_admin_from_auth() sont définies ici.
 -- ════════════════════════════════════════════════════════════
-
-CREATE OR REPLACE FUNCTION public.is_project_admin()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
-$$;
 
 CREATE OR REPLACE FUNCTION public.is_platform_admin()
 RETURNS BOOLEAN
@@ -514,24 +489,6 @@ STABLE
 SECURITY DEFINER
 AS $$
   SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_verifier()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') = 'verifier'
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_project_client()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_client', 'client')
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_admin_from_auth()
@@ -637,9 +594,9 @@ CREATE POLICY "aggregators_member_select"
     ON public.aggregators FOR SELECT TO authenticated
     USING (
         EXISTS (
-            SELECT 1 FROM public.companies c
-            WHERE c.aggregator_id = aggregators.id
-              AND public.is_company_member(c.id)
+            SELECT 1 FROM public.organizations o
+            WHERE o.aggregator_id = aggregators.id
+              AND public.is_organization_member(o.id)
         )
     );
 
@@ -692,9 +649,9 @@ CREATE POLICY "credit_sales_member_select"
     ON public.credit_sales FOR SELECT TO authenticated
     USING (
         EXISTS (
-            SELECT 1 FROM public.companies c
-            WHERE c.aggregator_id = credit_sales.aggregator_id
-              AND public.is_company_member(c.id)
+            SELECT 1 FROM public.organizations o
+            WHERE o.aggregator_id = credit_sales.aggregator_id
+              AND public.is_organization_member(o.id)
         )
     );
 
@@ -732,9 +689,9 @@ CREATE POLICY "credit_sale_lots_member_select"
         EXISTS (
             SELECT 1
             FROM public.credit_sales cs
-            JOIN public.companies c ON c.aggregator_id = cs.aggregator_id
+            JOIN public.organizations o ON o.aggregator_id = cs.aggregator_id
             WHERE cs.id = credit_sale_lots.credit_sale_id
-              AND public.is_company_member(c.id)
+              AND public.is_organization_member(o.id)
         )
     );
 
@@ -755,8 +712,8 @@ CREATE POLICY "credit_lots_admin_all"
             SELECT 1
             FROM public.projects p
             JOIN public.operational_units ou ON ou.id = p.operational_unit_id
-            JOIN public.companies c ON c.id = ou.company_id
-            JOIN public.aggregators agg ON agg.id = c.aggregator_id
+            JOIN public.organizations org ON org.id = ou.organization_id
+            JOIN public.aggregators agg ON agg.id = org.aggregator_id
             WHERE p.id = credit_lots.project_id
               AND public.is_aggregator_admin(agg.id)
         )
@@ -766,8 +723,8 @@ CREATE POLICY "credit_lots_admin_all"
             SELECT 1
             FROM public.projects p
             JOIN public.operational_units ou ON ou.id = p.operational_unit_id
-            JOIN public.companies c ON c.id = ou.company_id
-            JOIN public.aggregators agg ON agg.id = c.aggregator_id
+            JOIN public.organizations org ON org.id = ou.organization_id
+            JOIN public.aggregators agg ON agg.id = org.aggregator_id
             WHERE p.id = credit_lots.project_id
               AND public.is_aggregator_admin(agg.id)
         )
@@ -782,7 +739,7 @@ CREATE POLICY "credit_lots_member_select"
             FROM public.projects p
             JOIN public.operational_units ou ON ou.id = p.operational_unit_id
             WHERE p.id = credit_lots.project_id
-              AND public.is_company_member(ou.company_id)
+              AND public.is_organization_member(ou.organization_id)
         )
     );
 
@@ -806,9 +763,9 @@ CREATE POLICY "distribution_rules_member_select"
     ON public.distribution_rules FOR SELECT TO authenticated
     USING (
         EXISTS (
-            SELECT 1 FROM public.companies c
-            WHERE c.aggregator_id = distribution_rules.aggregator_id
-              AND public.is_company_member(c.id)
+            SELECT 1 FROM public.organizations o
+            WHERE o.aggregator_id = distribution_rules.aggregator_id
+              AND public.is_organization_member(o.id)
         )
     );
 
@@ -830,7 +787,7 @@ CREATE POLICY "mdo_admin_all"
 DROP POLICY IF EXISTS "mdo_member_select_own" ON public.member_distribution_overrides;
 CREATE POLICY "mdo_member_select_own"
     ON public.member_distribution_overrides FOR SELECT TO authenticated
-    USING (public.is_company_member(company_id));
+    USING (public.is_organization_member(organization_id));
 
 -- TABLE : credit_sale_allocations
 ALTER TABLE public.credit_sale_allocations ENABLE ROW LEVEL SECURITY;
@@ -862,7 +819,7 @@ CREATE POLICY "csa_admin_all"
 DROP POLICY IF EXISTS "csa_member_select_own" ON public.credit_sale_allocations;
 CREATE POLICY "csa_member_select_own"
     ON public.credit_sale_allocations FOR SELECT TO authenticated
-    USING (public.is_company_member(company_id));
+    USING (public.is_organization_member(organization_id));
 
 -- TABLE : operational_units
 ALTER TABLE public.operational_units ENABLE ROW LEVEL SECURITY;
@@ -876,13 +833,13 @@ CREATE POLICY "operational_units_superadmin_all"
 DROP POLICY IF EXISTS "operational_units_owner_all" ON public.operational_units;
 CREATE POLICY "operational_units_owner_all"
     ON public.operational_units FOR ALL TO authenticated
-    USING (public.is_company_owner(company_id))
-    WITH CHECK (public.is_company_owner(company_id));
+    USING (public.is_organization_owner(organization_id))
+    WITH CHECK (public.is_organization_owner(organization_id));
 
 DROP POLICY IF EXISTS "operational_units_member_select" ON public.operational_units;
 CREATE POLICY "operational_units_member_select"
     ON public.operational_units FOR SELECT TO authenticated
-    USING (public.is_company_member(company_id));
+    USING (public.is_organization_member(organization_id));
 
 
 -- ════════════════════════════════════════════════════════════
@@ -1009,9 +966,9 @@ CREATE POLICY "operational_units_aggregator_admin_select"
     ON public.operational_units FOR SELECT TO authenticated
     USING (
         EXISTS (
-            SELECT 1 FROM public.companies c
-            WHERE c.id = operational_units.company_id
-              AND public.is_aggregator_admin(c.aggregator_id)
+            SELECT 1 FROM public.organizations org
+            WHERE org.id = operational_units.organization_id
+              AND public.is_aggregator_admin(org.aggregator_id)
         )
     );
 
@@ -1072,10 +1029,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_primary_admin
 --     projects, verification_sessions
 --
 --   Agrégateurs (9 tables) :
---     aggregator_admins, aggregators, companies*, company_members*,
+--     aggregator_admins, aggregators,
 --     credit_lots, credit_sale_allocations, credit_sale_lots,
---     credit_sales, distribution_rules, invitations*,
+--     credit_sales, distribution_rules,
 --     member_distribution_overrides, operational_units
 --
---   (* tables partagées / pré-existantes du domaine entreprises)
 -- ============================================================
+
+COMMIT;
