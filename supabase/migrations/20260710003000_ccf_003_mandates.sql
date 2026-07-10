@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS public.mandates (
     issuer_org_id    UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     receiver_org_id  UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     mandate_scope    public.mandate_scope NOT NULL,
-    permissions      jsonb NOT NULL DEFAULT '{"actions": []}'::jsonb,
+    permissions      jsonb NOT NULL,
     -- permissions.actions[] doit contenir uniquement des codes de mandate_actions
     -- Validé par le trigger validate_mandate_permissions_trigger (voir §3)
     status           text NOT NULL DEFAULT 'draft'
@@ -91,6 +91,11 @@ BEGIN
         RAISE EXCEPTION
             'mandates.permissions.actions doit être un tableau JSON (reçu: %)',
             jsonb_typeof(v_actions);
+    END IF;
+
+    -- Rejeter un tableau d'actions vide
+    IF jsonb_array_length(v_actions) = 0 THEN
+        RAISE EXCEPTION 'mandates.permissions.actions doit contenir au moins une action du catalogue mandate_actions.';
     END IF;
 
     -- Valider chaque action contre le catalogue fermé

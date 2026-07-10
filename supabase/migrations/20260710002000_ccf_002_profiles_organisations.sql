@@ -110,9 +110,7 @@ ALTER TYPE public.org_role RENAME VALUE 'terrain' TO 'membre';
 -- ════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS public.profiles (
-    id         UUID PRIMARY KEY,
-    -- id = auth.users.id (synchronisé par trigger, pas de FK explicite
-    -- pour garder le schéma public propre — convention Supabase)
+    id         UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email      text NOT NULL,
     full_name  text,
     status     text NOT NULL DEFAULT 'active'

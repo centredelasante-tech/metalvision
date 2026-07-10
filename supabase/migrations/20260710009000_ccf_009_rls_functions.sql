@@ -133,12 +133,12 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- Domaine Regroupements/MRV (existant) :
 --   is_company_member(UUID)  → organization_members (renommé depuis companies)
---   is_company_owner(UUID)   → organization_members avec role = 'admin'
+--   is_company_owner(UUID)   → organization_members avec org_role = 'admin'
 --   is_aggregator_admin(UUID) → aggregator_admins
 --
 -- Domaine CCF (nouveau) :
 --   is_organization_member(UUID) → organization_members, status = 'active'
---   is_organization_owner(UUID)  → organization_members, role = 'admin', status = 'active'
+--   is_organization_owner(UUID)  → organization_members, org_role = 'admin', status = 'active'
 --   user_org_ids()               → organization_members, status = 'active'
 --   user_project_ids()           → project_participants via user_org_ids()
 --   is_ccf_project_coordinator() → ccf_projects + organization_members
