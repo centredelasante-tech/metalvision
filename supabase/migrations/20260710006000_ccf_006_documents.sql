@@ -100,35 +100,26 @@ CREATE POLICY "documents_org_private_select"
 -- project : propriétaire OU participant actif du projet lié
 -- MVP-RA-025 : un participant actif (project_participants) peut lire
 -- les documents de portée projet attachés à son projet.
--- NOTE : La référence à public.project_participants est créée via DO/EXECUTE
---        pour éviter l'erreur 42P01 si ccf_005 n'est pas encore parsé
---        dans la même session de migration.
 DROP POLICY IF EXISTS "documents_project_select" ON public.documents;
-DO $$
-BEGIN
-    EXECUTE $policy$
-        CREATE POLICY "documents_project_select"
-            ON public.documents
-            FOR SELECT
-            TO authenticated
-            USING (
-                visibility = 'project'
-                AND (
-                    public.is_organization_member(owner_org_id)
-                    OR (
-                        object_type = 'project'
-                        AND EXISTS (
-                            SELECT 1 FROM public.project_participants pp
-                            WHERE pp.project_id = documents.object_id
-                              AND public.is_organization_member(pp.organization_id)
-                              AND pp.status = 'active'
-                        )
-                    )
+CREATE POLICY "documents_project_select"
+    ON public.documents
+    FOR SELECT
+    TO authenticated
+    USING (
+        visibility = 'project'
+        AND (
+            public.is_organization_member(owner_org_id)
+            OR (
+                object_type = 'project'
+                AND EXISTS (
+                    SELECT 1 FROM public.project_participants pp
+                    WHERE pp.project_id = documents.object_id
+                      AND public.is_organization_member(pp.organization_id)
+                      AND pp.status = 'active'
                 )
             )
-    $policy$;
-END;
-$$;
+        )
+    );
 
 -- confidential : MVP-RA-027 — accès restreint selon le contexte métier de l'objet
 -- 5 branches :
