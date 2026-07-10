@@ -148,7 +148,7 @@ CREATE POLICY "logistics_steps_update"
             WHERE om.organization_id = responsible_org_id
               AND om.user_id = auth.uid()
               AND om.status = 'active'
-              AND (om.role = 'admin' OR om.operational_profile = 'terrain')
+              AND (om.org_role = 'admin' OR om.operational_profile = 'terrain')
         )
     )
     WITH CHECK (
@@ -163,7 +163,7 @@ CREATE POLICY "logistics_steps_update"
             WHERE om.organization_id = responsible_org_id
               AND om.user_id = auth.uid()
               AND om.status = 'active'
-              AND (om.role = 'admin' OR om.operational_profile = 'terrain')
+              AND (om.org_role = 'admin' OR om.operational_profile = 'terrain')
         )
     );
 
