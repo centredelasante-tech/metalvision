@@ -49,19 +49,24 @@ $$;
 -- Retourne les project_id (ccf_projects) où l'utilisateur courant
 -- participe via une organisation active dans project_participants.
 -- Dépend de public.user_org_ids().
+-- NOTE : LANGUAGE plpgsql utilisé pour différer la résolution de
+--        public.project_participants à l'exécution (pas à la compilation).
 -- ════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.user_project_ids()
 RETURNS SETOF UUID
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    RETURN QUERY
     SELECT pp.project_id
     FROM public.project_participants pp
     WHERE pp.organization_id = ANY(SELECT public.user_org_ids())
       AND pp.status = 'active';
+END;
 $$;
 
 -- ════════════════════════════════════════════════════════════
@@ -69,16 +74,19 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- Retourne true si l'utilisateur courant est admin d'une organisation
 -- coordinatrice du projet CCF donné.
+-- NOTE : LANGUAGE plpgsql utilisé pour différer la résolution de
+--        public.ccf_projects à l'exécution (pas à la compilation).
 -- ════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.is_ccf_project_coordinator(p_project_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT EXISTS (
+BEGIN
+    RETURN EXISTS (
         SELECT 1
         FROM public.ccf_projects p
         WHERE p.id = p_project_id
@@ -86,10 +94,11 @@ AS $$
               SELECT organization_id
               FROM public.organization_members
               WHERE user_id = auth.uid()
-                AND role = 'admin'
+                AND org_role = 'admin'
                 AND status = 'active'
           )
     );
+END;
 $$;
 
 -- ════════════════════════════════════════════════════════════
@@ -97,22 +106,26 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- Retourne true si l'utilisateur courant est membre actif d'une
 -- organisation participant activement au projet CCF donné.
+-- NOTE : LANGUAGE plpgsql utilisé pour différer la résolution de
+--        public.project_participants à l'exécution (pas à la compilation).
 -- ════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.is_ccf_project_participant(p_project_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT EXISTS (
+BEGIN
+    RETURN EXISTS (
         SELECT 1
         FROM public.project_participants pp
         WHERE pp.project_id = p_project_id
           AND pp.organization_id = ANY(SELECT public.user_org_ids())
           AND pp.status = 'active'
     );
+END;
 $$;
 
 -- ════════════════════════════════════════════════════════════
