@@ -95,7 +95,7 @@ CREATE POLICY "documents_project_select"
         )
     );
 
--- confidential : seuls le déposant (org propriétaire) et le coordinateur du projet
+-- confidential : MVP-RA-027 — accès restreint selon le contexte métier de l'objet
 DROP POLICY IF EXISTS "documents_confidential_select" ON public.documents;
 CREATE POLICY "documents_confidential_select"
     ON public.documents
@@ -104,11 +104,17 @@ CREATE POLICY "documents_confidential_select"
     USING (
         visibility = 'confidential'
         AND (
-            -- Membre de l'organisation propriétaire (déposant)
+            -- Le déposant (organisation propriétaire) voit toujours son propre document
             public.is_organization_member(owner_org_id)
-            OR
-            -- Admin de l'organisation coordinatrice du projet lié
-            (
+            OR (
+                object_type = 'opportunity'
+                AND EXISTS (
+                    SELECT 1 FROM public.opportunities o
+                    WHERE o.id = documents.object_id
+                      AND public.is_organization_member(o.coordinator_org_id)
+                )
+            )
+            OR (
                 object_type = 'project'
                 AND EXISTS (
                     SELECT 1 FROM public.ccf_projects p
@@ -116,6 +122,17 @@ CREATE POLICY "documents_confidential_select"
                       AND public.is_organization_member(p.coordinator_org_id)
                 )
             )
+            OR (
+                object_type = 'mandate'
+                AND EXISTS (
+                    SELECT 1 FROM public.mandates m
+                    WHERE m.id = documents.object_id
+                      AND (public.is_organization_member(m.issuer_org_id)
+                           OR public.is_organization_member(m.receiver_org_id))
+                )
+            )
+            -- 'organization' et 'capability' : couverts par la première clause (owner_org_id) seule.
+            -- 'value_report' : couverture en attente — voir note ci-dessous.
         )
     );
 
