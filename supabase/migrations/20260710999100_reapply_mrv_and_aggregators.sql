@@ -120,11 +120,38 @@ CREATE INDEX IF NOT EXISTS idx_evidence_files_log_id ON public.evidence_files(re
 CREATE INDEX IF NOT EXISTS idx_verification_sessions_project_id ON public.verification_sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_emission_factors_category ON public.emission_factors(category);
 
--- ── 1.4 (supprimé) ───────────────────────────────────────────
--- Les définitions non sécurisées de is_project_admin(), is_verifier()
--- et is_project_client() (lisant raw_user_meta_data/raw_app_meta_data)
--- ont été retirées. Les versions sécurisées via auth.jwt() sont définies
--- en Section 3 et constituent la seule définition active de ces fonctions.
+-- ── 1.4 HELPER FUNCTIONS (before RLS) ────────────────────────
+-- Définitions sécurisées via auth.jwt() -> 'app_metadata'.
+-- Ces fonctions sont définies ici, avant l'activation RLS (1.5) et les
+-- policies (1.6) qui les référencent. is_platform_admin() et
+-- is_admin_from_auth() sont définis en Section 3 (non dupliqués ici).
+
+CREATE OR REPLACE FUNCTION public.is_project_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_verifier()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') = 'verifier'
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_project_client()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_client', 'client')
+$$;
 
 -- ── 1.5 ENABLE RLS ───────────────────────────────────────────
 ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
@@ -450,16 +477,10 @@ CREATE INDEX IF NOT EXISTS idx_projects_operational_unit_id ON public.projects(o
 -- ════════════════════════════════════════════════════════════
 -- SECTION 3 — FONCTIONS RLS HELPER (DOMAINE PLATEFORME)
 -- Source : 20260707110000_document_is_platform_admin.sql
+-- Note : is_project_admin(), is_verifier(), is_project_client() sont
+-- définis en Section 1.4 (avant les policies RLS qui les utilisent).
+-- Seules is_platform_admin() et is_admin_from_auth() sont définies ici.
 -- ════════════════════════════════════════════════════════════
-
-CREATE OR REPLACE FUNCTION public.is_project_admin()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
-$$;
 
 CREATE OR REPLACE FUNCTION public.is_platform_admin()
 RETURNS BOOLEAN
@@ -468,24 +489,6 @@ STABLE
 SECURITY DEFINER
 AS $$
   SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_admin', 'admin')
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_verifier()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') = 'verifier'
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_project_client()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT (auth.jwt() -> 'app_metadata' ->> 'role') IN ('project_client', 'client')
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_admin_from_auth()
