@@ -6,20 +6,21 @@
 --   RT-03 : companies = organizations dans le domaine collaboratif.
 --            La table "companies" existante est RENOMMÉE en "organizations"
 --            et "company_members" en "organization_members".
---            Ordre non négociable : 1a → 1a-bis → 1b → 1c → 1d.
+--            Ordre non négociable : 1a → 1a-bis → 1a-ter → 1b → 1c → 1d.
 --
 -- ORDRE D'EXÉCUTION DANS CETTE MIGRATION :
---   1a.     Renommer tables et type ENUM
---   1a-bis. Renommer la colonne "role" en "org_role" dans organization_members
---   1b.     Ajouter nouvelles colonnes (AVANT de toucher aux valeurs d'enum)
---   1c.     Recopier la notion "terrain" dans operational_profile
---           (AVANT de renommer les valeurs d'enum)
---   1d.     Renommer les valeurs d'enum
---   2.      Créer la table profiles
---   3.      Adapter les fonctions helper existantes
---   4.      Créer les alias minces pour le domaine CCF
---   5.      Indexes
---   6.      RLS sur les nouvelles tables
+--   1a.      Renommer tables et type ENUM
+--   1a-bis.  Renommer la colonne "role" en "org_role" dans organization_members
+--   1a-ter.  Renommer la colonne "company_id" en "organization_id" dans organization_members
+--   1b.      Ajouter nouvelles colonnes (AVANT de toucher aux valeurs d'enum)
+--   1c.      Recopier la notion "terrain" dans operational_profile
+--            (AVANT de renommer les valeurs d'enum)
+--   1d.      Renommer les valeurs d'enum
+--   2.       Créer la table profiles
+--   3.       Adapter les fonctions helper existantes
+--   4.       Créer les alias minces pour le domaine CCF
+--   5.       Indexes
+--   6.       RLS sur les nouvelles tables
 --
 -- IMPORTANT : Les fonctions is_company_member(), is_company_owner(),
 --   company_has_no_members() sont CONSERVÉES sous leurs noms originaux
@@ -40,12 +41,20 @@ ALTER TYPE public.company_member_role RENAME TO org_role;
 -- ÉTAPE 1a-bis — Renommer la colonne "role" en "org_role"
 -- CRITIQUE : doit être exécuté APRÈS le renommage du type (1a)
 --            et AVANT l'ajout de colonnes (1b) et le UPDATE (1c).
---            Sans ce renommage, la colonne s'appellerait "role"
---            alors que le type s'appelle "org_role" — incohérence
---            de nomenclature et risque de confusion dans les fonctions.
 -- ════════════════════════════════════════════════════════════
 
 ALTER TABLE public.organization_members RENAME COLUMN role TO org_role;
+
+-- ════════════════════════════════════════════════════════════
+-- ÉTAPE 1a-ter — Renommer la colonne "company_id" en "organization_id"
+-- CRITIQUE : doit être exécuté APRÈS le renommage de la table (1a)
+--            et AVANT toute référence à om.organization_id dans les fonctions.
+--            Sans ce renommage, la colonne s'appelle encore "company_id"
+--            et toutes les requêtes WHERE om.organization_id = ... échouent
+--            avec ERROR 42703: column om.organization_id does not exist.
+-- ════════════════════════════════════════════════════════════
+
+ALTER TABLE public.organization_members RENAME COLUMN company_id TO organization_id;
 
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 1b — Ajouter nouvelles colonnes
@@ -140,7 +149,7 @@ CREATE TRIGGER on_auth_user_created_profile
 -- ÉTAPE 3 — Adapter les fonctions helper existantes
 -- Les noms sont CONSERVÉS pour ne pas casser les policies existantes.
 -- Seul le corps est mis à jour pour pointer vers les tables renommées
--- et la colonne renommée (org_role au lieu de role).
+-- et les colonnes renommées (organization_id, org_role au lieu de company_id, role).
 -- ════════════════════════════════════════════════════════════
 
 -- is_company_member() — pointe maintenant vers organization_members
