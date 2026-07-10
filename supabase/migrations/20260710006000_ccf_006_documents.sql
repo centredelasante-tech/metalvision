@@ -80,18 +80,9 @@ CREATE POLICY "documents_project_select"
         visibility = 'project'
         AND (
             -- Membre de l'organisation propriétaire
+            -- Note : la clause participant actif (project_participants) est définie
+            -- dans ccf_006b, après la création de la table project_participants (ccf_005).
             public.is_organization_member(owner_org_id)
-            OR
-            -- Participant actif au projet lié (via object_type = 'project')
-            (
-                object_type = 'project'
-                AND EXISTS (
-                    SELECT 1 FROM public.project_participants pp
-                    WHERE pp.project_id = documents.object_id
-                      AND public.is_organization_member(pp.organization_id)
-                      AND pp.status = 'active'
-                )
-            )
         )
     );
 
