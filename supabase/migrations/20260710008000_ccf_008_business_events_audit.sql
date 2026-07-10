@@ -120,9 +120,11 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- 4. TRIGGERS D'AUDIT sur les tables gouvernées CCF
 -- ════════════════════════════════════════════════════════════
--- NOTE : Chaque DROP TRIGGER et CREATE TRIGGER est enveloppé dans
--- un bloc DO avec EXCEPTION WHEN undefined_table THEN NULL pour
--- éviter une erreur 42P01 si la table cible n'existe pas encore.
+-- Chaque DROP TRIGGER et CREATE TRIGGER est enveloppé dans un bloc
+-- DO avec EXCEPTION WHEN undefined_table THEN NULL pour absorber
+-- l'erreur 42P01 si la table cible n'existe pas encore (ex. : ccf_003
+-- non encore appliqué). Cela garantit l'idempotence de la migration
+-- sans masquer d'autres erreurs.
 -- ════════════════════════════════════════════════════════════
 
 DO $$ BEGIN
