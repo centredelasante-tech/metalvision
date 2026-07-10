@@ -40,7 +40,7 @@ DROP TYPE IF EXISTS public.ccf_project_phase CASCADE;
 
 CREATE TABLE IF NOT EXISTS public.ccf_projects (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    opportunity_id      UUID REFERENCES public.opportunities(id) ON DELETE RESTRICT,
+    opportunity_id      UUID NOT NULL REFERENCES public.opportunities(id) ON DELETE RESTRICT,
     title               text NOT NULL,
     coordinator_org_id  UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     phase               text NOT NULL DEFAULT 'draft'
