@@ -977,16 +977,6 @@ CREATE POLICY "documents_confidential_select"
                 )
             )
             OR (
-                object_type = 'value_report'
-                AND EXISTS (
-                    SELECT 1
-                    FROM public.value_reports vr
-                    JOIN public.ccf_projects p ON p.id = vr.project_id
-                    WHERE vr.id = documents.object_id
-                      AND public.is_organization_member(p.coordinator_org_id)
-                )
-            )
-            OR (
                 object_type = 'mandate'
                 AND EXISTS (
                     SELECT 1 FROM public.mandates m
@@ -999,6 +989,9 @@ CREATE POLICY "documents_confidential_select"
             )
         )
     );
+-- NOTE: the 'value_report' branch is intentionally omitted here because
+-- public.value_reports does not yet exist at this point in the migration.
+-- It is added as a separate policy below, after value_reports is created (CCF-007).
 
 DROP POLICY IF EXISTS "documents_owner_admin_insert" ON public.documents;
 CREATE POLICY "documents_owner_admin_insert"
@@ -1167,6 +1160,23 @@ DROP POLICY IF EXISTS "logistics_steps_superadmin_select" ON public.logistics_st
 CREATE POLICY "logistics_steps_superadmin_select"
     ON public.logistics_steps FOR SELECT TO authenticated
     USING (public.is_platform_superadmin());
+
+-- Deferred policy for documents with object_type='value_report'
+-- (split from documents_confidential_select because value_reports didn't exist yet in CCF-006)
+DROP POLICY IF EXISTS "documents_confidential_value_report_select" ON public.documents;
+CREATE POLICY "documents_confidential_value_report_select"
+    ON public.documents FOR SELECT TO authenticated
+    USING (
+        visibility = 'confidential'
+        AND object_type = 'value_report'
+        AND EXISTS (
+            SELECT 1
+            FROM public.value_reports vr
+            JOIN public.ccf_projects p ON p.id = vr.project_id
+            WHERE vr.id = documents.object_id
+              AND public.is_organization_member(p.coordinator_org_id)
+        )
+    );
 
 DROP POLICY IF EXISTS "value_reports_participant_select" ON public.value_reports;
 CREATE POLICY "value_reports_participant_select"
