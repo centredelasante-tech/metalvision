@@ -161,6 +161,16 @@ CREATE TRIGGER audit_value_reports
     AFTER INSERT OR UPDATE OR DELETE ON public.value_reports
     FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
+DROP TRIGGER IF EXISTS audit_capabilities ON public.capabilities;
+CREATE TRIGGER audit_capabilities
+    AFTER INSERT OR UPDATE OR DELETE ON public.capabilities
+    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
+
+DROP TRIGGER IF EXISTS audit_opportunities ON public.opportunities;
+CREATE TRIGGER audit_opportunities
+    AFTER INSERT OR UPDATE OR DELETE ON public.opportunities
+    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
+
 -- ════════════════════════════════════════════════════════════
 -- 5. INDEXES
 -- ════════════════════════════════════════════════════════════
