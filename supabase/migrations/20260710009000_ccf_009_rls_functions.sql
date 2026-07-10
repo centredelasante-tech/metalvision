@@ -74,16 +74,19 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- Retourne true si l'utilisateur courant est admin d'une organisation
 -- coordinatrice du projet CCF donné.
+-- NOTE : LANGUAGE plpgsql utilisé pour différer la résolution de
+--        public.ccf_projects à l'exécution (pas à la compilation).
 -- ════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.is_ccf_project_coordinator(p_project_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT EXISTS (
+BEGIN
+    RETURN EXISTS (
         SELECT 1
         FROM public.ccf_projects p
         WHERE p.id = p_project_id
@@ -95,6 +98,7 @@ AS $$
                 AND status = 'active'
           )
     );
+END;
 $$;
 
 -- ════════════════════════════════════════════════════════════
