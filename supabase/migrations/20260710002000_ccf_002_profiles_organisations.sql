@@ -34,7 +34,7 @@
 
 ALTER TABLE IF EXISTS public.companies RENAME TO organizations;
 ALTER TABLE IF EXISTS public.company_members RENAME TO organization_members;
-ALTER TYPE IF EXISTS public.company_member_role RENAME TO org_role;
+ALTER TYPE public.company_member_role RENAME TO org_role;
 
 -- ════════════════════════════════════════════════════════════
 -- ÉTAPE 1a-bis — Renommer la colonne "role" en "org_role"
