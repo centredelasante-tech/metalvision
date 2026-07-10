@@ -8,7 +8,7 @@
 --   3. Table opportunity_capabilities (jonction)
 --   4. Indexes
 --   5. RLS
---   6. Trigger enforce_opp_cap_update_scope (MVP-RA-023)
+--   6. Trigger enforce_opp_cap_update_scope (MVP-RA-023 / MVP-RA-024)
 -- ============================================================
 
 -- ════════════════════════════════════════════════════════════
@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS public.opportunities (
 -- MVP-RA-023 : status étendu à ('active', 'removed', 'withdrawn').
 --   'removed'   = retiré par le coordonnateur de l'opportunité.
 --   'withdrawn' = retrait autonome par l'organisation candidate.
+-- MVP-RA-024 : status étendu à ('active', 'removed', 'withdrawn', 'pending_reacceptance').
+--   'pending_reacceptance' = relance initiée par le coordonnateur depuis 'withdrawn' ;
+--                            l'organisation candidate doit accepter (→ active) ou refuser
+--                            (→ withdrawn). Statut terminal pour le coordonnateur seul.
 -- ════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS public.opportunity_capabilities (
@@ -68,7 +72,7 @@ CREATE TABLE IF NOT EXISTS public.opportunity_capabilities (
     capability_id  UUID NOT NULL REFERENCES public.capabilities(id) ON DELETE CASCADE,
     fit_score      numeric CHECK (fit_score >= 0 AND fit_score <= 100),
     status         text NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'removed', 'withdrawn')),
+        CHECK (status IN ('active', 'removed', 'withdrawn', 'pending_reacceptance')),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (opportunity_id, capability_id)
 );
@@ -225,12 +229,13 @@ CREATE POLICY "opp_cap_coordinator_admin_insert"
         )
     );
 
--- UPDATE (MVP-RA-023) : policy élargie — coordonnateur OU organisation candidate.
+-- UPDATE (MVP-RA-023 / MVP-RA-024) : policy élargie — coordonnateur OU organisation candidate.
 --   Le trigger enforce_opp_cap_update_scope (section 6) limite ensuite
 --   précisément ce que chacun peut modifier :
---     • coordonnateur : peut modifier fit_score et passer status → 'removed'
---     • organisation candidate : peut uniquement passer status → 'withdrawn'
---       (uniquement sur sa propre capacité, uniquement depuis 'active')
+--     • coordonnateur : transitions active→removed, active→active, withdrawn→pending_reacceptance.
+--                       fit_score modifiable uniquement si OLD.status='active' AND NEW.status='active'.
+--     • organisation candidate : transitions active→withdrawn, pending_reacceptance→active,
+--                                pending_reacceptance→withdrawn. fit_score toujours immuable.
 DROP POLICY IF EXISTS "opp_cap_coordinator_admin_update" ON public.opportunity_capabilities;
 DROP POLICY IF EXISTS "opp_cap_update_coordinator_or_candidate" ON public.opportunity_capabilities;
 CREATE POLICY "opp_cap_update_coordinator_or_candidate"
@@ -277,23 +282,27 @@ CREATE POLICY "opp_cap_superadmin_select"
     USING (public.is_platform_superadmin());
 
 -- ════════════════════════════════════════════════════════════
--- 6. TRIGGER : enforce_opp_cap_update_scope (MVP-RA-023)
+-- 6. TRIGGER : enforce_opp_cap_update_scope (MVP-RA-023 / MVP-RA-024)
 -- ════════════════════════════════════════════════════════════
 -- La policy RLS ci-dessus autorise deux acteurs à faire un UPDATE.
 -- Ce trigger BEFORE UPDATE affine les droits en rejetant toute
--- modification hors périmètre :
+-- modification hors périmètre.
+--
+-- Matrice des transitions autorisées :
 --
 --   Coordonnateur (admin de coordinator_org_id) :
---     - Peut modifier fit_score (toute valeur valide).
---     - Peut passer status de 'active' → 'removed'.
---     - Ne peut PAS passer status → 'withdrawn'.
---     - Ne peut PAS modifier opportunity_id, capability_id, created_at.
+--     active              → active              (mise à jour fit_score uniquement)
+--     active              → removed             (retrait par le coordonnateur)
+--     withdrawn           → pending_reacceptance (relance MVP-RA-024)
+--     Toute autre transition impliquant withdrawn ou pending_reacceptance
+--     en départ ou en arrivée (hors ces deux cas précis) est rejetée.
+--     fit_score : modifiable UNIQUEMENT si OLD.status = 'active' AND NEW.status = 'active'.
 --
 --   Organisation candidate (admin de la org propriétaire de la capacité) :
---     - Peut UNIQUEMENT passer status de 'active' → 'withdrawn'.
---     - Ne peut PAS modifier fit_score, opportunity_id, capability_id,
---       created_at, ni passer status vers toute autre valeur.
---     - Ne peut PAS retirer ('removed') — c'est le rôle du coordonnateur.
+--     active              → withdrawn           (retrait autonome MVP-RA-023)
+--     pending_reacceptance → active             (acceptation de la relance MVP-RA-024)
+--     pending_reacceptance → withdrawn          (refus de la relance MVP-RA-024)
+--     fit_score : toujours immuable, sans exception.
 --
 -- Toute tentative hors périmètre lève une exception SQLSTATE P0001.
 -- ════════════════════════════════════════════════════════════
@@ -337,36 +346,62 @@ BEGIN
 
     -- ── Règles coordonnateur ──────────────────────────────────
     IF v_is_coordinator THEN
-        -- Le coordonnateur ne peut pas passer status → 'withdrawn'
-        IF NEW.status = 'withdrawn' THEN
-            RAISE EXCEPTION 'Le coordonnateur ne peut pas passer status à ''withdrawn'' — seule l''organisation candidate peut se retirer'
-                USING ERRCODE = 'P0001';
-        END IF;
-        -- Transitions de status autorisées pour le coordonnateur :
-        -- active → removed  (retrait par le coordonnateur)
-        -- active → active   (pas de changement de status, ex. mise à jour fit_score)
-        -- removed → removed (idempotent)
-        IF NEW.status NOT IN ('active', 'removed') THEN
-            RAISE EXCEPTION 'Transition de status non autorisée pour le coordonnateur : % → %',
+        -- Transitions autorisées pour le coordonnateur :
+        --   active    → active              (mise à jour fit_score)
+        --   active    → removed             (retrait)
+        --   withdrawn → pending_reacceptance (relance MVP-RA-024)
+        -- Toute autre transition impliquant withdrawn ou pending_reacceptance
+        -- (en départ ou en arrivée, hors les deux cas précis ci-dessus) est rejetée.
+        IF NOT (
+            (OLD.status = 'active'    AND NEW.status = 'active')
+            OR (OLD.status = 'active'    AND NEW.status = 'removed')
+            OR (OLD.status = 'withdrawn' AND NEW.status = 'pending_reacceptance')
+        ) THEN
+            RAISE EXCEPTION
+                'Transition de status non autorisée pour le coordonnateur : % → %. '
+                'Transitions permises : active→active, active→removed, withdrawn→pending_reacceptance.',
                 OLD.status, NEW.status
                 USING ERRCODE = 'P0001';
         END IF;
+
+        -- fit_score modifiable uniquement si OLD.status = 'active' AND NEW.status = 'active'
+        IF NEW.fit_score IS DISTINCT FROM OLD.fit_score THEN
+            IF NOT (OLD.status = 'active' AND NEW.status = 'active') THEN
+                RAISE EXCEPTION
+                    'fit_score ne peut être modifié que lorsque OLD.status = ''active'' AND NEW.status = ''active'' '
+                    '(transition courante : % → %)',
+                    OLD.status, NEW.status
+                    USING ERRCODE = 'P0001';
+            END IF;
+        END IF;
+
         RETURN NEW;
     END IF;
 
     -- ── Règles organisation candidate ────────────────────────
     IF v_is_candidate THEN
-        -- L'organisation candidate ne peut QUE passer status active → withdrawn
-        IF NOT (OLD.status = 'active' AND NEW.status = 'withdrawn') THEN
-            RAISE EXCEPTION 'L''organisation candidate ne peut que passer status de ''active'' à ''withdrawn'' (état actuel : %)',
-                OLD.status
+        -- Transitions autorisées pour l'organisation candidate :
+        --   active              → withdrawn  (retrait autonome MVP-RA-023)
+        --   pending_reacceptance → active    (acceptation de la relance MVP-RA-024)
+        --   pending_reacceptance → withdrawn (refus de la relance MVP-RA-024)
+        IF NOT (
+            (OLD.status = 'active'               AND NEW.status = 'withdrawn')
+            OR (OLD.status = 'pending_reacceptance' AND NEW.status = 'active')
+            OR (OLD.status = 'pending_reacceptance' AND NEW.status = 'withdrawn')
+        ) THEN
+            RAISE EXCEPTION
+                'Transition de status non autorisée pour l''organisation candidate : % → %. '
+                'Transitions permises : active→withdrawn, pending_reacceptance→active, pending_reacceptance→withdrawn.',
+                OLD.status, NEW.status
                 USING ERRCODE = 'P0001';
         END IF;
-        -- fit_score ne doit pas changer
+
+        -- fit_score toujours immuable pour l'organisation candidate, sans exception
         IF NEW.fit_score IS DISTINCT FROM OLD.fit_score THEN
             RAISE EXCEPTION 'L''organisation candidate ne peut pas modifier fit_score'
                 USING ERRCODE = 'P0001';
         END IF;
+
         RETURN NEW;
     END IF;
 
