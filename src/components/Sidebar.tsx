@@ -27,6 +27,7 @@ const adminNav: NavItem[] = [
   { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badgeKey: 'lots', group: 'opérations' },
   { label: 'Conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'opérations' },
   { label: 'Clients', href: '/', icon: 'BuildingOfficeIcon', group: 'opérations' },
+  { label: 'Organisations', href: '/organizations', icon: 'BuildingOffice2Icon', group: 'opérations' },
   { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badgeKey: 'factures', group: 'finance' },
   { label: 'Prix métaux', href: '/', icon: 'CurrencyEuroIcon', group: 'finance' },
