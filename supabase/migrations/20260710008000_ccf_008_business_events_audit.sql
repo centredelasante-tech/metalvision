@@ -120,90 +120,90 @@ $$;
 -- ════════════════════════════════════════════════════════════
 -- 4. TRIGGERS D'AUDIT sur les tables gouvernées CCF
 -- ════════════════════════════════════════════════════════════
--- NOTE : Les DROP TRIGGER sont enveloppés dans des blocs DO avec
--- EXCEPTION WHEN undefined_table THEN NULL pour éviter une erreur
--- si la table cible n'existe pas encore (migration fraîche).
+-- NOTE : Chaque DROP TRIGGER et CREATE TRIGGER est enveloppé dans
+-- un bloc DO avec EXCEPTION WHEN undefined_table THEN NULL pour
+-- éviter une erreur 42P01 si la table cible n'existe pas encore.
 -- ════════════════════════════════════════════════════════════
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_organizations ON public.organizations;
+    CREATE TRIGGER audit_organizations
+        AFTER INSERT OR UPDATE OR DELETE ON public.organizations
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_organizations
-    AFTER INSERT OR UPDATE OR DELETE ON public.organizations
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_organization_members ON public.organization_members;
+    CREATE TRIGGER audit_organization_members
+        AFTER INSERT OR UPDATE OR DELETE ON public.organization_members
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_organization_members
-    AFTER INSERT OR UPDATE OR DELETE ON public.organization_members
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_mandates ON public.mandates;
+    CREATE TRIGGER audit_mandates
+        AFTER INSERT OR UPDATE OR DELETE ON public.mandates
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_mandates
-    AFTER INSERT OR UPDATE OR DELETE ON public.mandates
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_ccf_projects ON public.ccf_projects;
+    CREATE TRIGGER audit_ccf_projects
+        AFTER INSERT OR UPDATE OR DELETE ON public.ccf_projects
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_ccf_projects
-    AFTER INSERT OR UPDATE OR DELETE ON public.ccf_projects
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_project_participants ON public.project_participants;
+    CREATE TRIGGER audit_project_participants
+        AFTER INSERT OR UPDATE OR DELETE ON public.project_participants
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_project_participants
-    AFTER INSERT OR UPDATE OR DELETE ON public.project_participants
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_documents ON public.documents;
+    CREATE TRIGGER audit_documents
+        AFTER INSERT OR UPDATE OR DELETE ON public.documents
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_documents
-    AFTER INSERT OR UPDATE OR DELETE ON public.documents
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_logistics_steps ON public.logistics_steps;
+    CREATE TRIGGER audit_logistics_steps
+        AFTER INSERT OR UPDATE OR DELETE ON public.logistics_steps
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_logistics_steps
-    AFTER INSERT OR UPDATE OR DELETE ON public.logistics_steps
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_value_reports ON public.value_reports;
+    CREATE TRIGGER audit_value_reports
+        AFTER INSERT OR UPDATE OR DELETE ON public.value_reports
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_value_reports
-    AFTER INSERT OR UPDATE OR DELETE ON public.value_reports
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_capabilities ON public.capabilities;
+    CREATE TRIGGER audit_capabilities
+        AFTER INSERT OR UPDATE OR DELETE ON public.capabilities
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_capabilities
-    AFTER INSERT OR UPDATE OR DELETE ON public.capabilities
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 DO $$ BEGIN
     DROP TRIGGER IF EXISTS audit_opportunities ON public.opportunities;
+    CREATE TRIGGER audit_opportunities
+        AFTER INSERT OR UPDATE OR DELETE ON public.opportunities
+        FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
-CREATE TRIGGER audit_opportunities
-    AFTER INSERT OR UPDATE OR DELETE ON public.opportunities
-    FOR EACH ROW EXECUTE FUNCTION public.audit_log_trigger_fn();
 
 -- ════════════════════════════════════════════════════════════
 -- 5. INDEXES
