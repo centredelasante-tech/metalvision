@@ -7,8 +7,8 @@ import AppLogo from '@/components/ui/AppLogo';
 
 interface InvitationData {
   invitation_id: string;
-  company_id: string;
-  company_name: string;
+  organization_id: string;
+  organization_name: string;
   email: string;
   role: string;
   status: string;
@@ -127,18 +127,19 @@ export default function InvitationPage() {
         return;
       }
 
-      // Step 2: Insert into company_members
-      const { error: memberError } = await supabase.from('company_members').insert({
-        company_id: invitation.company_id,
+      // Step 2: Insert into organization_members
+      const { error: memberError } = await supabase.from('organization_members').insert({
+        organization_id: invitation.organization_id,
         user_id: userId,
-        role: invitation.role,
+        org_role: invitation.role,
+        status: 'active',
       });
 
       if (memberError) {
         // If already a member (unique constraint), continue to accept invitation
         if (!memberError.message.includes('unique') && !memberError.message.includes('duplicate')) {
           setSubmitError(
-            `Erreur lors de l'ajout à l'entreprise : ${memberError.message}. Veuillez contacter le support.`
+            `Erreur lors de l'ajout à l'organisation : ${memberError.message}. Veuillez contacter le support.`
           );
           setPageState('form');
           return;
@@ -243,7 +244,7 @@ export default function InvitationPage() {
             <div className="rounded-lg bg-primary/5 border border-primary/20 px-4 py-3 mb-6">
               <p className="text-sm text-foreground">
                 Vous êtes invité(e) à rejoindre{' '}
-                <span className="font-semibold">{invitation.company_name}</span> en tant que{' '}
+                <span className="font-semibold">{invitation.organization_name}</span> en tant que{' '}
                 <span className="font-semibold">{roleLabel}</span>.
               </p>
             </div>
