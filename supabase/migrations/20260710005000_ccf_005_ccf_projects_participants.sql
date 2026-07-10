@@ -6,21 +6,36 @@
 --   RT-01/RT-02 : La table "projects" existante (domaine MRV ISO 14064)
 --                 et son ENUM "project_status" ne sont PAS touchés.
 --                 Le domaine collaboratif utilise la table "ccf_projects"
---                 avec ses propres colonnes status (TEXT+CHECK) et phase (ENUM).
+--                 avec ses propres colonnes status (TEXT+CHECK) et phase (TEXT+CHECK).
+--   RT-05 : Aucun ENUM Postgres partagé pour les statuts/phases.
+--            ccf_projects.phase était explicitement nommé dans la liste
+--            des champs à traiter en TEXT + CHECK (décision 4).
+--            L'ENUM public.ccf_project_phase est supprimé.
 --
 -- CONTENU :
---   1. Table ccf_projects
---   2. Table project_participants
---   3. Indexes
---   4. RLS
+--   1. Suppression de l'ENUM public.ccf_project_phase (si présent depuis ccf_001)
+--   2. Table ccf_projects (phase en TEXT+CHECK, pas ENUM)
+--   3. Table project_participants
+--   4. Indexes
+--   5. RLS
 -- ============================================================
 
 -- ════════════════════════════════════════════════════════════
--- 1. TABLE : ccf_projects
+-- 1. Suppression de l'ENUM public.ccf_project_phase
+-- Conformément à la décision RT-05 : TEXT + CHECK par table,
+-- aucun ENUM Postgres partagé pour les statuts/phases.
+-- ccf_projects.phase est implémenté en TEXT + CHECK ci-dessous.
+-- ════════════════════════════════════════════════════════════
+
+DROP TYPE IF EXISTS public.ccf_project_phase CASCADE;
+
+-- ════════════════════════════════════════════════════════════
+-- 2. TABLE : ccf_projects
 -- ════════════════════════════════════════════════════════════
 -- Projet collaboratif CCF (Centre de Consolidation Ferroviaire).
 -- Distinct de la table "projects" du domaine MRV ISO 14064.
 -- Transforme une opportunité qualifiée en exécution coordonnée.
+-- phase et status sont tous deux TEXT + CHECK (décision RT-05).
 -- ════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS public.ccf_projects (
@@ -28,7 +43,8 @@ CREATE TABLE IF NOT EXISTS public.ccf_projects (
     opportunity_id      UUID REFERENCES public.opportunities(id) ON DELETE RESTRICT,
     title               text NOT NULL,
     coordinator_org_id  UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
-    phase               public.ccf_project_phase NOT NULL DEFAULT 'draft',
+    phase               text NOT NULL DEFAULT 'draft'
+        CHECK (phase IN ('draft', 'active', 'execution', 'review', 'closed')),
     status              text NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'active', 'paused', 'closed', 'archived')),
     start_date          TIMESTAMPTZ,
@@ -38,7 +54,7 @@ CREATE TABLE IF NOT EXISTS public.ccf_projects (
 );
 
 -- ════════════════════════════════════════════════════════════
--- 2. TABLE : project_participants
+-- 3. TABLE : project_participants
 -- ════════════════════════════════════════════════════════════
 -- Relie les organisations aux projets CCF avec un rôle contextuel.
 -- Aucun droit de projet sans une ligne project_participants active.
@@ -59,7 +75,7 @@ CREATE TABLE IF NOT EXISTS public.project_participants (
 );
 
 -- ════════════════════════════════════════════════════════════
--- 3. INDEXES
+-- 4. INDEXES
 -- ════════════════════════════════════════════════════════════
 
 -- ccf_projects
@@ -79,7 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_project_participants_active
     WHERE status = 'active';
 
 -- ════════════════════════════════════════════════════════════
--- 4. RLS
+-- 5. RLS
 -- ════════════════════════════════════════════════════════════
 
 ALTER TABLE public.ccf_projects        ENABLE ROW LEVEL SECURITY;
