@@ -8,6 +8,7 @@
 --   3. Table opportunity_capabilities (jonction)
 --   4. Indexes
 --   5. RLS
+--   6. Trigger enforce_opp_cap_update_scope (MVP-RA-023)
 -- ============================================================
 
 -- ════════════════════════════════════════════════════════════
@@ -56,6 +57,9 @@ CREATE TABLE IF NOT EXISTS public.opportunities (
 -- 3. TABLE : opportunity_capabilities (jonction)
 -- ════════════════════════════════════════════════════════════
 -- Relie les capacités aux opportunités avec un score de correspondance.
+-- MVP-RA-023 : status étendu à ('active', 'removed', 'withdrawn').
+--   'removed'   = retiré par le coordonnateur de l'opportunité.
+--   'withdrawn' = retrait autonome par l'organisation candidate.
 -- ════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS public.opportunity_capabilities (
@@ -64,7 +68,7 @@ CREATE TABLE IF NOT EXISTS public.opportunity_capabilities (
     capability_id  UUID NOT NULL REFERENCES public.capabilities(id) ON DELETE CASCADE,
     fit_score      numeric CHECK (fit_score >= 0 AND fit_score <= 100),
     status         text NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'removed')),
+        CHECK (status IN ('active', 'removed', 'withdrawn')),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (opportunity_id, capability_id)
 );
@@ -221,25 +225,46 @@ CREATE POLICY "opp_cap_coordinator_admin_insert"
         )
     );
 
--- UPDATE : admin de l'organisation coordinatrice peut mettre à jour
---          fit_score (après évaluation) ou passer status à 'removed'
+-- UPDATE (MVP-RA-023) : policy élargie — coordonnateur OU organisation candidate.
+--   Le trigger enforce_opp_cap_update_scope (section 6) limite ensuite
+--   précisément ce que chacun peut modifier :
+--     • coordonnateur : peut modifier fit_score et passer status → 'removed'
+--     • organisation candidate : peut uniquement passer status → 'withdrawn'
+--       (uniquement sur sa propre capacité, uniquement depuis 'active')
 DROP POLICY IF EXISTS "opp_cap_coordinator_admin_update" ON public.opportunity_capabilities;
-CREATE POLICY "opp_cap_coordinator_admin_update"
+DROP POLICY IF EXISTS "opp_cap_update_coordinator_or_candidate" ON public.opportunity_capabilities;
+CREATE POLICY "opp_cap_update_coordinator_or_candidate"
     ON public.opportunity_capabilities
     FOR UPDATE
     TO authenticated
     USING (
+        -- Coordonnateur de l'opportunité
         EXISTS (
             SELECT 1 FROM public.opportunities o
             WHERE o.id = opportunity_id
               AND public.is_organization_owner(o.coordinator_org_id)
         )
+        OR
+        -- Organisation candidate (propriétaire de la capacité liée)
+        EXISTS (
+            SELECT 1 FROM public.capabilities c
+            WHERE c.id = capability_id
+              AND public.is_organization_owner(c.organization_id)
+        )
     )
     WITH CHECK (
+        -- Coordonnateur de l'opportunité
         EXISTS (
             SELECT 1 FROM public.opportunities o
             WHERE o.id = opportunity_id
               AND public.is_organization_owner(o.coordinator_org_id)
+        )
+        OR
+        -- Organisation candidate (propriétaire de la capacité liée)
+        EXISTS (
+            SELECT 1 FROM public.capabilities c
+            WHERE c.id = capability_id
+              AND public.is_organization_owner(c.organization_id)
         )
     );
 
@@ -250,3 +275,108 @@ CREATE POLICY "opp_cap_superadmin_select"
     FOR SELECT
     TO authenticated
     USING (public.is_platform_superadmin());
+
+-- ════════════════════════════════════════════════════════════
+-- 6. TRIGGER : enforce_opp_cap_update_scope (MVP-RA-023)
+-- ════════════════════════════════════════════════════════════
+-- La policy RLS ci-dessus autorise deux acteurs à faire un UPDATE.
+-- Ce trigger BEFORE UPDATE affine les droits en rejetant toute
+-- modification hors périmètre :
+--
+--   Coordonnateur (admin de coordinator_org_id) :
+--     - Peut modifier fit_score (toute valeur valide).
+--     - Peut passer status de 'active' → 'removed'.
+--     - Ne peut PAS passer status → 'withdrawn'.
+--     - Ne peut PAS modifier opportunity_id, capability_id, created_at.
+--
+--   Organisation candidate (admin de la org propriétaire de la capacité) :
+--     - Peut UNIQUEMENT passer status de 'active' → 'withdrawn'.
+--     - Ne peut PAS modifier fit_score, opportunity_id, capability_id,
+--       created_at, ni passer status vers toute autre valeur.
+--     - Ne peut PAS retirer ('removed') — c'est le rôle du coordonnateur.
+--
+-- Toute tentative hors périmètre lève une exception SQLSTATE P0001.
+-- ════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION public.enforce_opp_cap_update_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_is_coordinator  boolean := false;
+    v_is_candidate    boolean := false;
+BEGIN
+    -- Déterminer le rôle de l'appelant sur cette ligne
+    SELECT EXISTS (
+        SELECT 1 FROM public.opportunities o
+        WHERE o.id = NEW.opportunity_id
+          AND public.is_organization_owner(o.coordinator_org_id)
+    ) INTO v_is_coordinator;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.capabilities c
+        WHERE c.id = NEW.capability_id
+          AND public.is_organization_owner(c.organization_id)
+    ) INTO v_is_candidate;
+
+    -- ── Champs immuables (pour tous) ──────────────────────────
+    IF NEW.opportunity_id <> OLD.opportunity_id THEN
+        RAISE EXCEPTION 'opportunity_id est immuable sur opportunity_capabilities'
+            USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.capability_id <> OLD.capability_id THEN
+        RAISE EXCEPTION 'capability_id est immuable sur opportunity_capabilities'
+            USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.created_at <> OLD.created_at THEN
+        RAISE EXCEPTION 'created_at est immuable sur opportunity_capabilities'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    -- ── Règles coordonnateur ──────────────────────────────────
+    IF v_is_coordinator THEN
+        -- Le coordonnateur ne peut pas passer status → 'withdrawn'
+        IF NEW.status = 'withdrawn' THEN
+            RAISE EXCEPTION 'Le coordonnateur ne peut pas passer status à ''withdrawn'' — seule l''organisation candidate peut se retirer'
+                USING ERRCODE = 'P0001';
+        END IF;
+        -- Transitions de status autorisées pour le coordonnateur :
+        -- active → removed  (retrait par le coordonnateur)
+        -- active → active   (pas de changement de status, ex. mise à jour fit_score)
+        -- removed → removed (idempotent)
+        IF NEW.status NOT IN ('active', 'removed') THEN
+            RAISE EXCEPTION 'Transition de status non autorisée pour le coordonnateur : % → %',
+                OLD.status, NEW.status
+                USING ERRCODE = 'P0001';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    -- ── Règles organisation candidate ────────────────────────
+    IF v_is_candidate THEN
+        -- L'organisation candidate ne peut QUE passer status active → withdrawn
+        IF NOT (OLD.status = 'active' AND NEW.status = 'withdrawn') THEN
+            RAISE EXCEPTION 'L''organisation candidate ne peut que passer status de ''active'' à ''withdrawn'' (état actuel : %)',
+                OLD.status
+                USING ERRCODE = 'P0001';
+        END IF;
+        -- fit_score ne doit pas changer
+        IF NEW.fit_score IS DISTINCT FROM OLD.fit_score THEN
+            RAISE EXCEPTION 'L''organisation candidate ne peut pas modifier fit_score'
+                USING ERRCODE = 'P0001';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    -- Aucun rôle reconnu (ne devrait pas arriver si la policy RLS est correcte)
+    RAISE EXCEPTION 'Accès refusé : l''utilisateur courant n''est ni coordonnateur ni organisation candidate pour cette liaison'
+        USING ERRCODE = 'P0001';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS enforce_opp_cap_update_scope ON public.opportunity_capabilities;
+CREATE TRIGGER enforce_opp_cap_update_scope
+    BEFORE UPDATE ON public.opportunity_capabilities
+    FOR EACH ROW EXECUTE FUNCTION public.enforce_opp_cap_update_scope();
