@@ -1,3 +1,5 @@
+BEGIN;
+
 -- ============================================================
 -- RÉAPPLICATION MRV + DOMAINE AGRÉGATEURS
 -- Migration: 20260710999100_reapply_mrv_and_aggregators.sql
@@ -118,59 +120,11 @@ CREATE INDEX IF NOT EXISTS idx_evidence_files_log_id ON public.evidence_files(re
 CREATE INDEX IF NOT EXISTS idx_verification_sessions_project_id ON public.verification_sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_emission_factors_category ON public.emission_factors(category);
 
--- ── 1.4 HELPER FUNCTIONS (before RLS) ────────────────────────
-
-CREATE OR REPLACE FUNCTION public.is_project_admin()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'project_admin'
-      OR au.raw_user_meta_data->>'role' = 'admin'
-      OR au.raw_app_meta_data->>'role' = 'project_admin'
-      OR au.raw_app_meta_data->>'role' = 'admin'
-    )
-  )
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_verifier()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'verifier'
-      OR au.raw_app_meta_data->>'role' = 'verifier'
-    )
-  )
-$$;
-
-CREATE OR REPLACE FUNCTION public.is_project_client()
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users au
-    WHERE au.id = auth.uid()
-    AND (
-      au.raw_user_meta_data->>'role' = 'project_client'
-      OR au.raw_user_meta_data->>'role' = 'client'
-      OR au.raw_app_meta_data->>'role' = 'project_client'
-      OR au.raw_app_meta_data->>'role' = 'client'
-    )
-  )
-$$;
+-- ── 1.4 (supprimé) ───────────────────────────────────────────
+-- Les définitions non sécurisées de is_project_admin(), is_verifier()
+-- et is_project_client() (lisant raw_user_meta_data/raw_app_meta_data)
+-- ont été retirées. Les versions sécurisées via auth.jwt() sont définies
+-- en Section 3 et constituent la seule définition active de ces fonctions.
 
 -- ── 1.5 ENABLE RLS ───────────────────────────────────────────
 ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
@@ -1078,3 +1032,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_primary_admin
 --     member_distribution_overrides, operational_units
 --
 -- ============================================================
+
+COMMIT;
