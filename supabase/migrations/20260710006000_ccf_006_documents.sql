@@ -89,6 +89,8 @@ CREATE POLICY "documents_project_select"
 -- confidential : MVP-RA-027 — accès restreint selon le contexte métier de l'objet
 -- NOTE : La clause object_type = 'project' (ccf_projects) est définie dans ccf_006b
 --        pour garantir que public.ccf_projects existe avant d'être référencé.
+-- NOTE : La clause object_type = 'mandate' (mandates) est également définie dans ccf_006b
+--        pour éviter toute dépendance circulaire ou d'ordre d'exécution.
 DROP POLICY IF EXISTS "documents_confidential_select" ON public.documents;
 CREATE POLICY "documents_confidential_select"
     ON public.documents
@@ -107,17 +109,9 @@ CREATE POLICY "documents_confidential_select"
                       AND public.is_organization_member(o.coordinator_org_id)
                 )
             )
-            OR (
-                object_type = 'mandate'
-                AND EXISTS (
-                    SELECT 1 FROM public.mandates m
-                    WHERE m.id = documents.object_id
-                      AND (public.is_organization_member(m.issuer_org_id)
-                           OR public.is_organization_member(m.receiver_org_id))
-                )
-            )
             -- 'organization' et 'capability' : couverts par la première clause (owner_org_id) seule.
             -- 'project' : clause coordinateur définie dans ccf_006b (après ccf_005).
+            -- 'mandate' : clause émetteur/récepteur définie dans ccf_006b (après ccf_003).
             -- 'value_report' : couverture en attente — voir note ci-dessous.
         )
     );
