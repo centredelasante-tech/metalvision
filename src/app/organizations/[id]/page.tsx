@@ -339,7 +339,7 @@ export default function OrganizationDetailPage() {
         .order('org_role', { ascending: true }),
 
       // Query 3: check if current user is owner via RPC
-      supabase.rpc('is_company_owner', { p_company_id: orgId }),
+      supabase.rpc('is_organization_owner', { p_org_id: orgId }),
     ]);
 
     if (orgRes.error) {
