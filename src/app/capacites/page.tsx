@@ -530,7 +530,7 @@ export default function CapacitesPage() {
           .from('opportunities')
           .select('id, title, coordinator_org_id')
           .in('coordinator_org_id', adminOrgIds)
-          .not('status', 'in', '("closed","archived")');
+          .not('status', 'in', '(closed,archived)');
         setCoordinatedOpportunities((oppsData ?? []) as Opportunity[]);
       }
     } catch (err: any) {
