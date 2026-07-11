@@ -20,6 +20,7 @@ const clientNav: NavItem[] = [
   { label: 'Mes conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'principal' },
   { label: 'Suivi transport', href: '/transport-tracking', icon: 'TruckIcon', group: 'transport' },
   { label: 'Impact Carbone', href: '/carbon-impact', icon: 'CloudIcon', group: 'carbone' },
+  { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
 ];
 
 const adminNav: NavItem[] = [
@@ -29,6 +30,7 @@ const adminNav: NavItem[] = [
   { label: 'Clients', href: '/', icon: 'BuildingOfficeIcon', group: 'opérations' },
   { label: 'Organisations', href: '/organizations', icon: 'BuildingOffice2Icon', group: 'opérations' },
   { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
+  { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badgeKey: 'factures', group: 'finance' },
   { label: 'Prix métaux', href: '/', icon: 'CurrencyEuroIcon', group: 'finance' },
   { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
