@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04` (voir `INC-S08-01`, action de processus recommandée)**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — et §9duodecies pour la revue backend de S05 (Projet CCF), **1 bug corrigé (`INC-S05-01`), prêt pour le frontend**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -448,6 +448,32 @@ La revue de `INC-S08-01` (§9decies) n'avait porté que sur le code du PR, jamai
 
 ---
 
+## 9duodecies. Revue backend S05 (Projet CCF) — avant construction du frontend, 12 juillet 2026
+
+Même discipline que S06/S07/S08 : revue de `ccf_005` (`ccf_projects`, `project_participants`) et `ccf_007` (`logistics_steps`, `value_reports`, `ai_assistance_logs`) avant de briefer Rocket sur l'écran `/projets/:id` — l'écran le plus dense du MVP (participants, phases, documents, logistique, risques, rapport).
+
+**Résultat : 1 bug réel trouvé et corrigé, 1 clarification de portée nécessaire (aucune table `risks` n'existe), le reste conforme.**
+
+| Code | Constat | Cause racine | Correction |
+|---|---|---|---|
+| INC-S05-01 | La policy `project_participants_update` (ccf_005) autorise soit l'admin de l'organisation coordinatrice, soit l'admin de l'organisation participante elle-même, à modifier une ligne `project_participants` — sans restriction sur les colonnes modifiables. Un admin d'organisation participante pouvait donc réécrire sa propre colonne `mandate_id` vers **n'importe quel mandat existant dans la base**, sans validation que ce mandat concerne réellement ce projet ou cette organisation. Risque concret : `project_participants.mandate_id` est utilisé par `approve_document()` (`INC-S07-01`) pour vérifier l'éligibilité d'un mandataire — un admin aurait pu théoriquement pointer vers un mandat `approve_documents` obtenu ailleurs dans le système pour se rendre éligible à l'approbation de documents d'un projet sans rapport. | Aucune validation relationnelle entre `project_participants.mandate_id`, le projet et l'organisation participante — seule la policy RLS gardait l'accès en écriture, pas la cohérence des données. | Trigger `enforce_project_participants_mandate_consistency()` (`BEFORE INSERT OR UPDATE`) ajouté : rejette tout `mandate_id` dont le mandat n'est pas reçu par cette organisation (`receiver_org_id`) et émis par l'organisation coordinatrice du projet (`issuer_org_id`). N'affecte que les écritures futures. `project_participants.project_role`, en comparaison, n'est vérifié par aucune policy ni fonction RLS ailleurs dans le schéma (confirmé par grep) — une auto-élévation de ce champ reste cosmétique, aucune correction nécessaire sur ce point. |
+
+**Clarification de portée (pas un bug)** : l'écran S05 est spécifié comme affichant « participants, phases, documents, logistique, **risques**, rapport » (backlog technique). Aucune table `risks` n'existe dans le schéma, et le cahier fonctionnel ne détaille jamais ce concept au-delà d'une mention générique. **Pour cette itération, "risques" devra être un indicateur calculé côté frontend** (ex. étapes logistiques `blocked`, dates `target_end_date` dépassées, participants `declined`) — pas une nouvelle table à faire construire par Rocket. À clarifier explicitement dans le brief pour éviter que Rocket n'invente une table ou ne bloque en attendant une clarification.
+
+**Conforme, vérifié sans écart :**
+- `ccf_projects` : SELECT (coordinateur + participants actifs), INSERT/UPDATE (admin coordinateur seul) — cohérent avec la matrice de permissions. Aucune machine à états stricte sur `phase`/`status` (contrairement aux mandats, `MVP-RA-029`) — flexibilité assumée, aucune règle métier documentée ne restreint les transitions de phase pour le MVP.
+- `logistics_steps` : SELECT (coordinateur + org responsable), UPDATE restreinte à l'admin coordinateur OU un membre de l'org responsable avec `org_role = 'admin'` OU `operational_profile = 'terrain'` — conforme à `RLS-005` (« Seule `responsible_org_id` ou coordonnateur peut modifier l'étape »), avec une nuance additionnelle (profil terrain) déjà documentée dans le fichier source.
+- `value_reports` : SELECT (coordinateur + participants actifs), INSERT/UPDATE réservés à l'admin coordinateur seul — cohérent avec US-010 (« Coordonnateur produit une synthèse »), aucun accès en écriture pour les participants.
+- `ai_assistance_logs` : lecture/écriture strictement limitées à l'utilisateur lui-même (`user_id = auth.uid()`), super-admin en lecture complète — pas d'écran S05 dédié requis pour cette table dans l'immédiat (agent IA hors scope de cette itération).
+- Catalogue `object_type`/`event_type` : `logistics_step`/`value_report` et `logistics_step_updated`/`value_report_generated` déjà présents — aucune extension d'ENUM nécessaire, contrairement à S07 (`INC-S07-02`).
+- Flux d'invitation d'organisation à un projet (US-013) : déjà couvert par `accept_project_invitation()`/`decline_project_invitation()` (construites et testées à la session S06) — aucune nouvelle RPC à construire, seulement à exposer dans le contexte de l'écran S05 plutôt que seulement depuis `/mandats`.
+
+**Aucune donnée n'a été touchée sur METALVISION pour cette session — revue de code statique uniquement. Migration `20260712120000_ccf_005b_project_participants_mandate_consistency.sql` créée, pas encore déployée.**
+
+**État de S05 après cette session : backend revu et corrigé, prêt pour le brief Rocket sur le frontend.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -463,7 +489,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** : backend conforme (§9novies), frontend accepté (`evenements/page.tsx`, `ObjectTimeline.tsx`) après avoir écarté la 4ᵉ occurrence du patron `INC-S07-04`/`INC-S06-07/08` (§9decies, `INC-S08-01`). Prochain écran : S09/S10 selon le mapping 30-60-90 (S01-S08 complets).
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). Écran S05 (`/projets/:id`) — **backend revu et corrigé (§9duodecies)** ; reste à déployer `20260712120000_ccf_005b_project_participants_mandate_consistency.sql` sur METALVISION et à briefer Rocket pour le frontend. Prochains après S05 selon la feuille de route 30-60-90 : S09 (`/cockpit`), dashboard complet (S01), puis S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
