@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), conforme, aucune correction nécessaire — §9quindecies-§9sexdecies pour S09 frontend, **complet, corrigé (`INC-S09-01`) et validé de bout en bout en production, 6ᵉ occurrence du patron de régression récurrente** — et §9septdecies pour la revue backend de S01 (Dashboard complet), **conforme, aucune correction nécessaire, prêt pour le frontend**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), conforme, aucune correction nécessaire — §9quindecies-§9sexdecies pour S09 frontend, **complet, corrigé (`INC-S09-01`) et validé de bout en bout en production, 6ᵉ occurrence du patron de régression récurrente** — §9septdecies pour la revue backend de S01 (Dashboard complet), conforme — et §9octodecies pour S01 frontend, **complet et intégré, 7ᵉ occurrence du patron de régression récurrente (avec réintroduction simultanée d'`INC-S05-02` et `INC-S09-01` hors périmètre du brief, non retenue)**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -616,6 +616,35 @@ Référence : backlog technique v1.0, S01 (« Cartes KPI, alertes, projets actif
 
 ---
 
+## 9octodecies. Revue PR Rocket S01 (Dashboard complet) — 12 juillet 2026
+
+PR reçue, **non fusionnée** (branche `rocket-update` récupérée via `FETCH_HEAD`). Diff complet revu fichier par fichier.
+
+**Résultat : 7ᵉ occurrence confirmée du patron de régression classique, PLUS réintroduction simultanée d'`INC-S05-02` ET `INC-S09-01` dans deux fichiers qui n'étaient même pas dans le périmètre du brief S01.** Les 2 fichiers neufs/légitimes ont été retenus ; les 2 fichiers déjà corrects sur `main` n'ont pas été touchés par le cherry-pick.
+
+### 7ᵉ occurrence — patron classique
+
+`ADR-MVP.md` (462 lignes écrasées), `supabase/migrations/20260710006200_ccf_006c_...sql` (revert identique du commentaire), `src/app/mandats/page.tsx` (doublon `business_events` d'`INC-S06-06` + `handleDecline` non symétrique), et les deux migrations fantômes `20260712020000_s06_mandates_complete.sql`/`20260712030000_s06_decline_mandate_rpc.sql`. Aucun retenu.
+
+### Aggravation notable — réintroduction d'`INC-S05-02` et `INC-S09-01` hors périmètre
+
+Le diff contenait aussi `src/app/cockpit/page.tsx` et `src/app/projets/[id]/page.tsx` — **deux fichiers que le brief S01 ne demandait pas de modifier** (le brief S01 est explicite : « ne modifiez pas… » ne mentionne même pas ces fichiers, la tâche portait uniquement sur `CCFDashboardSection.tsx`/`ClientDashboardContent.tsx`). Le diff sur `cockpit/page.tsx` annule exactement `INC-S09-01` (retour à `.in('org_role', ['admin', 'owner'])` et suppression de la vérification d'erreur). Le diff sur `projets/[id]/page.tsx` annule exactement `INC-S05-02` (retour à `object_id: project.id`).
+
+Ceci confirme que l'environnement local de Rocket n'est pas seulement en retard sur un sous-ensemble de fichiers historiquement problématiques (`ADR-MVP.md`, `mandats/page.tsx`, `ccf_006c`) — il semble régénérer ou retoucher des fichiers **sans rapport avec la tâche demandée**, à partir d'un instantané périmé englobant tout le dépôt. **Aucun de ces deux fichiers n'a été touché lors du cherry-pick** : `main` conservait déjà les versions correctes (post-`INC-S09-01`, post-`INC-S05-02`), donc rien à corriger cette fois — seulement à ne pas les écraser par erreur.
+
+### Fichiers retenus (revus contre `Brief-Rocket-S01-Dashboard.md`)
+
+| Fichier | Verdict |
+|---|---|
+| `src/app/components/CCFDashboardSection.tsx` (457 lignes, nouveau) | Conforme — 4 cartes KPI, panneau d'alertes multi-projets (étapes bloquées **sans** réutiliser `computeProjectRisks`, scopé à un seul projet, exactement comme demandé), liste projets actifs triée par `target_end_date`, liste documents incomplets (limite 10), liste événements récents tous objets confondus réutilisant uniquement `EventTypeBadge` (pas `ObjectTimeline`, correctement pas réutilisé tel quel comme demandé) ; **aucune écriture**, lecture seule confirmée. |
+| `src/app/components/ClientDashboardContent.tsx` (diff, 4 lignes) | Conforme — import + insertion de `<CCFDashboardSection />` après le bloc MRV existant, aucun composant MRV modifié. |
+
+**Ces 2 fichiers ont été cherry-pickés directement sur `main`** ; `cockpit/page.tsx` et `projets/[id]/page.tsx` laissés intacts (déjà corrects).
+
+**État de S01 après cette session : backend et frontend tous deux revus et intégrés à `main`. Reste à pousser, fermer/supprimer la PR/branche Rocket, et valider en direct dans le navigateur.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -631,7 +660,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **résolu, terminé** (§9quaterdecies, §9quindecies, §9sexdecies). Dashboard complet (S01) — **backend revu, conforme sans correction (§9septdecies)** ; reste à briefer Rocket pour le frontend. Prochain après S01 selon la feuille de route 30-60-90 : S10 (`/admin`) complet.
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **résolu, terminé** (§9quaterdecies, §9quindecies, §9sexdecies). ~~Dashboard complet (S01)~~ — **backend et frontend revus et intégrés (§9septdecies, §9octodecies)** ; reste à pousser, fermer/supprimer la PR/branche Rocket, et valider en direct. Prochain selon la feuille de route 30-60-90 : S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
