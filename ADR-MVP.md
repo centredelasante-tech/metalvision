@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — et §9novies pour la revue backend de S08 (Événements), **conforme, aucune correction requise**, prêt pour le frontend.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04` (voir `INC-S08-01`, action de processus recommandée)**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -399,6 +399,30 @@ Même discipline que S06/S07 : revue du backend événements (`ccf_008_business_
 
 ---
 
+## 9decies. PR Rocket — frontend S08 (Événements) : accepté partiellement — 12 juillet 2026, quatrième occurrence du même patron
+
+Rocket a de nouveau ouvert `rocket-update` (commit `21e6659`, parent = `main` HEAD exact au moment du diff) livrant l'écran `/evenements` en réponse au brief (`Brief-Rocket-S08-Evenements.md`). Revu intégralement avant fusion.
+
+**Contenu neuf — vérifié correct, identique en qualité aux livraisons précédentes :**
+
+| Fichier | Constat |
+|---|---|
+| `src/app/evenements/page.tsx` (427 lignes) | Journal en lecture seule, filtres organisation/`object_type`/`object_id`, pagination 50/page, payload dépliable, clic sur un ID applique le filtre. Aucune écriture, aucune RPC — conforme au brief. |
+| `src/components/ObjectTimeline.tsx` (201 lignes) | Composant autonome (`object_type`/`object_id` en props), exporte `EventTypeBadge`, `BusinessEvent`, `CcfEventType` pour réutilisation. Les 19 valeurs `ccf_event_type` mappées avec libellé français + repli générique pour toute valeur future inconnue. `evenements/page.tsx` importe correctement ces exports plutôt que de dupliquer la logique. |
+| `src/components/Sidebar.tsx` | Diff minimal (2 lignes), construit correctement par-dessus l'entrée « Documents » déjà présente sur `main` — pas de régression ici. |
+
+**Le reste du commit reproduit — au bit près, pas seulement dans l'esprit — les 4 régressions déjà documentées à `INC-S07-04`** : `ADR-MVP.md` écrasé (245 lignes de diff), `mandats/page.tsx` avec le même doublon `business_events` d'`INC-S06-06` réintroduit à l'identique, `ccf_006c` repassé à `MVP-RA-028`, et les 2 mêmes anciennes migrations S06 buguées (`20260712020000`, `20260712030000`) resurgissant mot pour mot. **Diff comparé ligne à ligne avec `INC-S07-04` : contenu strictement identique.**
+
+| Code | Constat |
+|---|---|
+| INC-S08-01 | **Quatrième occurrence du patron `INC-S06-07/08` / `INC-S07-04`, avec une nuance significative : le contenu périmé réintroduit est byte-pour-byte identique à celui d'`INC-S07-04`, pas une nouvelle staleness indépendante.** Ceci indique que l'environnement de travail local de Rocket ne s'est *toujours* pas resynchronisé depuis au moins la session S06 — chaque nouvelle branche repart du même instantané figé (antérieur à la correction d'`INC-S06-06`), auquel seul le nouveau travail de la itération courante est ajouté par-dessus. Une resynchronisation ponctuelle après un signalement ne suffit pas : le problème est structurel côté Rocket, pas un oubli isolé. |
+
+**Décision : identique à `INC-S07-04`.** Aucune fusion de la branche. Les 3 fichiers vérifiés corrects extraits directement de l'objet Git du commit `21e6659` et appliqués indépendamment sur `main` à jour. PR à fermer sans fusion ; branche à supprimer (sans besoin de vérifier l'ascendance cette fois — même raisonnement qu'à `INC-S07-04` : rien d'unique à préserver dans la branche au-delà de ce qui a déjà été extrait).
+
+**Recommandation à ce stade** : ne plus se contenter de documenter chaque occurrence dans ce registre. Le correctif à ce patron ne peut pas venir de la revue — il faut communiquer directement à Rocket, en des termes explicites et non techniques si nécessaire, que son environnement de travail doit être réinitialisé depuis `origin/main` avant toute nouvelle branche, sans quoi ce même diagnostic se répétera indéfiniment à chaque nouvelle fonctionnalité livrée.
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -414,7 +438,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** : backend et frontend complets et validés en production de bout en bout (§9septies, §9octies), PR Rocket fermé sans fusion, branche `rocket-update` supprimée. Écran S08 (`/evenements`) — **backend revu, conforme, aucune correction requise (§9novies)** ; reste à briefer Rocket pour le frontend. Prochain écran après S08 : S09/S10 selon le mapping 30-60-90 (S01-S07 complets).
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** : backend conforme (§9novies), frontend accepté (`evenements/page.tsx`, `ObjectTimeline.tsx`) après avoir écarté la 4ᵉ occurrence du patron `INC-S07-04`/`INC-S06-07/08` (§9decies, `INC-S08-01`). Prochain écran : S09/S10 selon le mapping 30-60-90 (S01-S08 complets).
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).

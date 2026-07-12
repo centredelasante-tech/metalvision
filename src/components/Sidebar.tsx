@@ -24,6 +24,7 @@ const clientNav: NavItem[] = [
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
   { label: 'Mandats', href: '/mandats', icon: 'DocumentCheckIcon', group: 'réseau' },
   { label: 'Documents', href: '/documents', icon: 'FolderOpenIcon', group: 'réseau' },
+  { label: 'Événements', href: '/evenements', icon: 'BoltIcon', group: 'réseau' },
 ];
 
 const adminNav: NavItem[] = [
@@ -37,6 +38,7 @@ const adminNav: NavItem[] = [
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
   { label: 'Mandats', href: '/mandats', icon: 'DocumentCheckIcon', group: 'réseau' },
   { label: 'Documents', href: '/documents', icon: 'FolderOpenIcon', group: 'réseau' },
+  { label: 'Événements', href: '/evenements', icon: 'BoltIcon', group: 'réseau' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badgeKey: 'factures', group: 'finance' },
   { label: 'Prix métaux', href: '/', icon: 'CurrencyEuroIcon', group: 'finance' },
   { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
