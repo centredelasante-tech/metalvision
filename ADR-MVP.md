@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), et §9bis à §9quinquies pour l'écran S06 (Mandats) — backend et frontend, **désormais complet et validé**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — et §9septies pour la revue backend de S07 (Documents), effectuée avant construction du frontend par Rocket.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -315,6 +315,30 @@ En réponse au point de nommage soulevé en §9quinquies, Rocket a ouvert une no
 
 ---
 
+## 9septies. Revue backend S07 (Documents) — avant construction du frontend, 12 juillet 2026
+
+Suivant la même discipline que S06 (§9bis) : revue complète du backend documents (`ccf_006`, `ccf_006b`, `ccf_006c`, complété par `ccf_010`) **avant** de briefer Rocket sur la construction de l'écran `/documents`, plutôt qu'après. Migrations couvertes : `20260710006000_ccf_006_documents.sql` (table, contrainte, RLS de base), `20260710006100_ccf_006b_documents_project_policy.sql` (policy `documents_project_select`, isolée pour une raison d'ordre de dépendance au parsing), `20260710006200_ccf_006c_documents_project_visibility_check.sql` (ré-application de MVP-RA-026).
+
+**Résultat : 2 problèmes réels trouvés (aucun bug actif — l'un latent, l'autre documentaire), tous deux corrigés avant tout travail frontend.**
+
+| Code | Constat | Cause racine | Correction |
+|---|---|---|---|
+| INC-S07-01 | `approve_documents` est une action canonique du catalogue fermé `mandate_actions` (confirmée comme scope MVP réel par le cahier fonctionnel v1.2 et le backlog technique v1.0 — pas une hypothèse). Un mandat peut légitimement porter cette permission, validée par le trigger `validate_mandate_permissions_trigger`. Mais **aucune policy RLS, RPC ou fonction n'exploitait jamais cette permission** : la seule policy `UPDATE` sur `documents` (`documents_owner_admin_update`) ne laissait que l'admin de l'organisation propriétaire modifier un document. Un mandataire tiers (ex. coordonnateur de projet détenant un mandat `approve_documents`) n'avait donc aucun moyen d'approuver ou de refuser un document déposé par une autre organisation — permission présente dans le modèle de données, jamais appliquée. Confirmé par grep exhaustif du dépôt : aucune référence à `mandates.permissions` nulle part dans le code touchant `documents`. | Le backlog technique (tâches `E09-T01` à `T04`) ne liste aucune tâche d'implémentation pour l'approbation mandatée — seulement la table, le stockage, le dépôt et le versionnement. Scope oublié plutôt que report volontaire assumé. | RPC `public.approve_document(p_document_id, p_decision)` créée (`SECURITY DEFINER`), `20260712101000_ccf_006e_documents_mandate_approval.sql`. Vérifie qu'un mandat actif, lié au projet propriétaire du document via `project_participants.mandate_id`, porte `approve_documents` dans `permissions.actions`, et que l'utilisateur courant appartient à l'organisation réceptrice de ce mandat. Repli conservé : l'admin de l'organisation propriétaire du document garde son accès direct existant. La policy `documents_owner_admin_update` n'a **pas** été modifiée — correction additive, aucun comportement existant retiré. **Consigne frontend (S07)** : toute transition de statut (`submitted → approved/rejected`) doit passer exclusivement par cette RPC, jamais par un `UPDATE` direct depuis le client, pour garantir un `business_event` unique (cf. `INC-S06-06`). |
+| INC-S07-02 | L'ENUM `ccf_event_type` ne contenait que `document_submitted`/`document_approved`. Or `documents.status` autorise aussi `rejected` et `archived` (CHECK dans `ccf_006`). Toute future écriture d'un `business_event` pour un refus ou un archivage aurait échoué à l'exécution (`invalid input value for enum ccf_event_type`) — même patron qu'`INC-S06-08`, détecté ici de façon proactive, avant que Rocket ne construise le frontend et ne heurte l'erreur en production. | Catalogue `event_type` du backlog technique limité à 17 valeurs, jamais étendu lors de l'ajout des statuts `rejected`/`archived` sur `documents.status`. | `ALTER TYPE public.ccf_event_type ADD VALUE IF NOT EXISTS` pour `document_rejected` et `document_archived` (`20260712100000_ccf_006d_documents_event_types.sql`), plutôt qu'un `DROP TYPE CASCADE` (éviterait de recréer un type déjà référencé par `business_events`). |
+
+**Constats mineurs, sans impact fonctionnel :**
+- `ccf_006c` : en-tête étiquetait la contrainte `documents_project_visibility_requires_project_object` comme "MVP-RA-028" (règle sans rapport, l'interdiction de l'auto-mandat) au lieu de MVP-RA-026 (la bonne règle, celle réellement appliquée par le code SQL). Commentaire corrigé directement dans le fichier source.
+- `ccf_010` (`20260710010000_ccf_010_rls_policies.sql`) contient une policy `documents_via_project_ids`, fonctionnellement redondante avec `documents_project_select` (ccf_006b) — même effet obtenu par deux chemins différents (`user_project_ids()` vs `EXISTS` direct sur `project_participants`). Pas un risque de sécurité, simple dette à nettoyer lors d'un futur passage de consolidation RLS — non traité dans cette session pour ne pas toucher à du code fonctionnel sans nécessité.
+
+**Conforme, vérifié sans écart :**
+- MVP-RA-026 (contrainte `visibility='project' ⇒ object_type='project'`) — appliquée deux fois (ccf_006 et ccf_006c), redondance harmless (`DROP CONSTRAINT IF EXISTS` avant chaque `ADD CONSTRAINT`, donc idempotent).
+- MVP-RA-027 (policy `documents_confidential_select`, 5 branches : déposant, opportunité, projet, value_report, mandat) — toutes les branches attendues sont présentes et correctement écrites.
+- Absence de policy `DELETE` sur `documents` — conforme à MVP-DA-006 (suppression physique interdite par conception, cycle de vie géré par `status`).
+
+**Aucune donnée n'a été touchée sur METALVISION pour cette session — revue de code statique uniquement, aucun déploiement encore effectué pour `ccf_006d`/`ccf_006e`.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -330,9 +354,11 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. Écrans S07–S10 selon le mapping 30-60-90 du backlog technique (S01-S06 complets : Organisations, Capacités, Opportunités, Mandats).
-2. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
-3. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
-4. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
-5. ~~Clarifier avec Rocket le point de nommage `decline_project_invitation`~~ — **résolu** : `decline_mandate()` créée et déployée directement (voir §9sexies), symétrie accept/decline désormais complète.
-6. Informer Rocket des `INC-S06-07`/`08` (voir §9sexies) avant sa prochaine tentative sur ce point — éviter une nouvelle branche construite sur une copie périmée du dépôt.
+1. Écran S07 (`/documents`) — **backend revu et corrigé (§9septies)** ; reste à briefer Rocket pour la construction du frontend, puis appliquer `ROCKET_REVIEW_CHECKLIST.md` à sa revue comme pour S06. S08–S10 restent selon le mapping 30-60-90 du backlog technique (S01-S06 complets : Organisations, Capacités, Opportunités, Mandats).
+2. Déployer sur METALVISION (`supabase db push`) les 3 fichiers correctifs S07 : `20260712100000_ccf_006d_documents_event_types.sql`, `20260712101000_ccf_006e_documents_mandate_approval.sql`, et le commentaire corrigé de `ccf_006c` — puis tester `approve_document()` avec un vrai mandat `approve_documents` avant de considérer le backend S07 comme validé en production (cette session n'a couvert que la revue de code statique, aucun test contre METALVISION).
+3. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
+4. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
+5. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
+6. ~~Clarifier avec Rocket le point de nommage `decline_project_invitation`~~ — **résolu** : `decline_mandate()` créée et déployée directement (voir §9sexies), symétrie accept/decline désormais complète.
+7. Informer Rocket des `INC-S06-07`/`08` (voir §9sexies) avant sa prochaine tentative sur ce point — éviter une nouvelle branche construite sur une copie périmée du dépôt.
+8. Nettoyage mineur reporté (§9septies) : redondance `documents_via_project_ids`/`documents_project_select` dans `ccf_010`, à traiter lors d'un futur passage de consolidation RLS — non bloquant.

@@ -13,6 +13,7 @@
 - [ ] Toute nouvelle valeur `event_type` insérée dans `business_events` existe réellement dans l'ENUM `ccf_event_type` (`20260710001000_ccf_001_enums.sql`) — sinon l'`INSERT` échoue à l'exécution, pas à la revue de code (`INC-S06-08`). Grep la définition de l'ENUM avant d'accepter toute nouvelle valeur mentionnée dans un commit.
 - [ ] Vérifier les **combinaisons** de policies `UPDATE` permissives sur une même table : Postgres combine tous les `WITH CHECK` par OR, pas seulement celui dont le `USING` a sélectionné la ligne. Une policy A peut autoriser une modification qu'aucune policy individuelle ne voulait permettre (`INC-S06-04`).
 - [ ] Tester avec un utilisateur `membre` (non-admin), pas seulement avec un compte admin/owner — un accès trop large ne se voit qu'en testant le rôle le plus faible.
+- [ ] Pour toute action listée dans un catalogue fermé de permissions (ex. `mandate_actions`) : vérifier qu'au moins une policy RLS ou une RPC vérifie réellement cette permission quelque part dans le code. Une action peut être validée par un trigger (existence dans le catalogue) sans jamais être *appliquée* nulle part — une permission déclarée mais non exploitée (`INC-S07-01`, `approve_documents`) est aussi dangereuse qu'une policy trop permissive, dans l'autre sens : une fonctionnalité promise par le modèle de données mais absente du backend.
 
 ## 2. Triggers
 
@@ -42,4 +43,4 @@
 
 ---
 
-*Dernière mise à jour : 12 juillet 2026, suite au PR refusé `decline_mandate` (`INC-S06-07`, `INC-S06-08`) — voir ADR-MVP.md §9sexies.*
+*Dernière mise à jour : 12 juillet 2026, suite à la revue backend S07/Documents (`INC-S07-01`, `INC-S07-02`) — voir ADR-MVP.md §9septies.*
