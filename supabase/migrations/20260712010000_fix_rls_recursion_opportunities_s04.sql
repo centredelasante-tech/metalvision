@@ -1,0 +1,25 @@
+-- =============================================================================
+-- Migration: 20260712010000 — S04 NO-OP
+--
+-- All SQL originally planned for this migration has been removed:
+--
+-- Points 1 & 2 (is_opportunity_visible_via_active_candidacy function +
+--   opportunities_coordinator_select rewrite) were already applied in
+--   migration 20260711070000 (INC-S03-07). Redundant here.
+--
+-- Point 3 (opportunities_coordinator_update with is_organization_member())
+--   was removed: it would have allowed any active member to qualify an
+--   opportunity, contradicting the rule that qualification is reserved for
+--   coordinator/admin. The existing opportunities_coordinator_admin_update
+--   policy (is_organization_owner()) already covers this correctly.
+--
+-- Point 4 (business_events_actor_insert with profiles.user_id) was removed:
+--   profiles.user_id does not exist — profiles.id = auth.uid() directly.
+--   The existing business_events_authenticated_insert policy already covers
+--   frontend event emission with WITH CHECK (actor_id = auth.uid()).
+--
+-- No schema changes are required for S04. All frontend code uses
+-- actor_id = auth.uid() directly without any profiles lookup.
+-- =============================================================================
+
+SELECT 1; -- no-op
