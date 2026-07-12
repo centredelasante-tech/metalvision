@@ -4,6 +4,7 @@ import ClientKPIGrid from './ClientKPIGrid';
 import ContainerGrid from './ContainerGrid';
 import RecentLotsTable from './RecentLotsTable';
 import ClientQuickActions from './ClientQuickActions';
+import CCFDashboardSection from './CCFDashboardSection';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -73,6 +74,9 @@ export default function ClientDashboardContent() {
           <ContainerGrid />
         </div>
       </div>
+
+      {/* CCF Section */}
+      <CCFDashboardSection />
     </div>
   );
 }

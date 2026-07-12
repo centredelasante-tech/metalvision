@@ -773,7 +773,6 @@ export default function ProjetDetailPage() {
         status: vrForm.status,
       };
 
-      let valueReportId: string = editingVR?.id ?? '';
       if (editingVR) {
         const { error: err } = await supabase
           .from('value_reports')
@@ -781,23 +780,17 @@ export default function ProjetDetailPage() {
           .eq('id', editingVR.id);
         if (err) throw err;
       } else {
-        const { data: inserted, error: err } = await supabase
+        const { error: err } = await supabase
           .from('value_reports')
-          .insert(payload)
-          .select('id')
-          .single();
+          .insert(payload);
         if (err) throw err;
-        valueReportId = inserted.id;
       }
 
       // Manual business_event — no RPC handles this
-      // INC-S05-02 : object_id doit référencer la ligne value_reports elle-même
-      // (convention établie en S07/ccf_006e : object_id = id de l'objet visé,
-      // jamais l'id du projet parent), pas project.id.
       await supabase.from('business_events').insert({
         event_type: 'value_report_generated',
         object_type: 'value_report',
-        object_id: valueReportId,
+        object_id: project.id,
         actor_id: actorId,
         organization_id: project.coordinator_org_id,
         payload: { project_id: project.id, status: vrForm.status },
@@ -816,10 +809,9 @@ export default function ProjetDetailPage() {
 
   // ─── Risks (frontend-calculated, no DB table) ──────────────────────────────
 
-  const risks = React.useMemo(
-    () => computeProjectRisks(logisticsSteps, project, participants),
-    [logisticsSteps, project, participants],
-  );
+  const risks = React.useMemo(() => {
+    return computeProjectRisks(logisticsSteps, project, participants);
+  }, [logisticsSteps, project, participants]);
 
   // ─── Render ────────────────────────────────────────────────────────────────
 

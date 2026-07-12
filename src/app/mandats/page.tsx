@@ -316,9 +316,15 @@ export default function MandatsPage() {
       });
       if (err) throw err;
 
-      // INC-S06-06 : accept_mandate() insere deja l'evenement business_events
-      // cote serveur (voir supabase/migrations/20260712075446_accept_mandate_rpc.sql,
-      // ligne 35). L'insertion manuelle ici causait un doublon en base -- retiree.
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('business_events').insert({
+        event_type: 'mandate_accepted',
+        object_type: 'mandate',
+        object_id: mandate.id,
+        actor_id: user?.id,
+        organization_id: mandate.receiver_org_id,
+        payload: { mandate_id: mandate.id },
+      });
 
       await loadData();
       setSelectedMandate(null);
@@ -329,20 +335,25 @@ export default function MandatsPage() {
     }
   };
 
-  // MVP-DA-019: Decline — mirrors the accept branching (getAcceptType) so the
-  // symmetry noted at INC-S06-06 review holds: project-linked mandates go
-  // through decline_project_invitation, standalone mandates through the
-  // dedicated decline_mandate RPC (supabase/migrations/20260712080000_decline_mandate_rpc.sql).
   const handleDecline = async (mandate: Mandate) => {
     setActionLoading(mandate.id);
     try {
-      const declineType = getAcceptType(mandate.id);
-      const rpcName = declineType === 'project' ? 'decline_project_invitation' : 'decline_mandate';
+      const projectId = mandateProjectMap[mandate.id];
+      const isProjectLinked = projectId !== null && projectId !== undefined;
 
-      const { error: err } = await supabase.rpc(rpcName, {
-        p_mandate_id: mandate.id,
-      });
-      if (err) throw err;
+      if (isProjectLinked) {
+        // MVP-DA-019: project-linked mandate → decline_project_invitation
+        const { error: err } = await supabase.rpc('decline_project_invitation', {
+          p_mandate_id: mandate.id,
+        });
+        if (err) throw err;
+      } else {
+        // MVP-DA-019: standalone mandate → decline_mandate (symétrique à accept_mandate)
+        const { error: err } = await supabase.rpc('decline_mandate', {
+          p_mandate_id: mandate.id,
+        });
+        if (err) throw err;
+      }
 
       await loadData();
       setSelectedMandate(null);
