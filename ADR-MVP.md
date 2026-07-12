@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies pour le backend S07 (Documents), **complet, corrigé et validé** — et §9octies pour le frontend S07, **accepté partiellement** (2 fichiers cherry-pickés, PR non fusionné, voir `INC-S07-04`).
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — et §9novies pour la revue backend de S08 (Événements), **conforme, aucune correction requise**, prêt pour le frontend.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -380,6 +380,25 @@ Rocket a ouvert une nouvelle branche `rocket-update` (commit `8a7b5bd`, un seul 
 
 ---
 
+## 9novies. Revue backend S08 (Événements) — avant construction du frontend, 12 juillet 2026
+
+Même discipline que S06/S07 : revue du backend événements (`ccf_008_business_events_audit.sql`) avant de briefer Rocket sur l'écran `/evenements`. Contrairement aux deux écrans précédents, **aucun bug ni gap bloquant trouvé** — comparable au résultat de la session S04 (§9).
+
+**Vérifié conforme :**
+- `business_events` : RLS `SELECT` = membre de l'organisation enregistrée sur l'événement OU acteur lui-même OU super-admin ; `INSERT` = acteur = utilisateur courant (`actor_id = auth.uid()`) — correspond exactement à la spécification du backlog technique (« Lecture contexte autorisé ; insertion par service applicatif sous contexte utilisateur »). L'absence de contrôle fin sur *quel* `event_type`/`object_id` un utilisateur peut publier est un choix de conception assumé dans le backlog, pas un oubli — le MVP fait confiance au code applicatif pour publier des événements cohérents avec l'action réellement effectuée, plutôt que de dupliquer cette logique dans les policies RLS.
+- `audit_logs` : aucune policy d'écriture pour les utilisateurs authentifiés (seul `audit_log_trigger_fn()`, `SECURITY DEFINER`, y écrit) ; lecture réservée au super-admin plateforme — cohérent avec l'usage voulu (log technique, pas un écran utilisateur ; l'écran S08 n'affiche que `business_events`, jamais `audit_logs`, confirmé par le backlog technique).
+- Séparation `business_events`/`audit_logs` : aucun trigger n'écrit dans `business_events`, seul le code applicatif le fait — cohérent avec la règle déjà documentée (« un fait ne doit jamais figurer dans les deux journaux »).
+- Idempotence de la migration : `CREATE TABLE IF NOT EXISTS`, `DROP POLICY`/`DROP TRIGGER IF EXISTS` avant chaque recréation — conforme. Absence intentionnelle de bloc `DO $$ ... EXCEPTION`, documentée explicitement dans le fichier : une table cible absente doit faire échouer bruyamment la migration plutôt que de laisser silencieusement une table sans trigger d'audit.
+- Catalogue `object_type` (`organization`, `capability`, `opportunity`, `project`, `mandate`, `document`, `logistics_step`, `value_report`) couvre bien les 8 types d'objets du domaine.
+
+**Recommandation non bloquante notée pour plus tard** : `E10-T02` du backlog technique (« Créer service applicatif `publishBusinessEvent` ») n'a jamais été construit — chaque écran (`mandats`, `opportunities`, et maintenant `documents`) réimplémente son propre `supabase.from('business_events').insert(...)` en ligne. C'est directement le terrain sur lequel `INC-S06-06` (doublon d'événement) s'est produit : sans point d'entrée unique, chaque nouvel écran repart de zéro et peut réintroduire le même genre d'erreur. Ne bloque pas S08 (un journal en lecture seule n'a pas besoin de publier d'événements), mais vaut la peine d'être considéré lors d'un futur refactor frontend.
+
+**Aucune donnée n'a été touchée sur METALVISION pour cette session — revue de code statique uniquement, aucune migration corrective nécessaire.**
+
+**État de S08 après cette session : backend déjà complet et conforme, aucune correction requise. Prêt pour le brief Rocket sur le frontend (journal filtrable par objet/projet/organisation, composant `ObjectTimeline` réutilisable selon le backlog).**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -395,7 +414,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** : backend et frontend complets et validés en production de bout en bout (§9septies, §9octies), PR Rocket fermé sans fusion, branche `rocket-update` supprimée. Prochain écran : **S08 (`/evenements`)** selon le mapping 30-60-90 du backlog technique (S01-S07 complets).
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** : backend et frontend complets et validés en production de bout en bout (§9septies, §9octies), PR Rocket fermé sans fusion, branche `rocket-update` supprimée. Écran S08 (`/evenements`) — **backend revu, conforme, aucune correction requise (§9novies)** ; reste à briefer Rocket pour le frontend. Prochain écran après S08 : S09/S10 selon le mapping 30-60-90 (S01-S07 complets).
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
