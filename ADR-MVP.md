@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — et §9septies pour la revue backend de S07 (Documents), effectuée avant construction du frontend par Rocket.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — et §9septies pour la revue et la validation en production du backend S07 (Documents), **complet, corrigé et validé**, prêt pour le frontend.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -337,6 +337,12 @@ Suivant la même discipline que S06 (§9bis) : revue complète du backend docume
 
 **Aucune donnée n'a été touchée sur METALVISION pour cette session — revue de code statique uniquement, aucun déploiement encore effectué pour `ccf_006d`/`ccf_006e`.**
 
+**Validation en production (12 juillet 2026, suite à cette session) :** `20260712100000_ccf_006d_documents_event_types.sql` et `20260712101000_ccf_006e_documents_mandate_approval.sql` déployés sur METALVISION (`supabase db push`, sans erreur). `approve_document()` testé directement via le SQL Editor Supabase avec des données réelles : projet de test référençant l'opportunité existante `5fff231b` (non modifiée), mandat actif `verification` avec `approve_documents` émis par Centre de Consolidation Ferroviaire Québec vers Test no 2, `auth.uid()` simulé pour un membre actif réel de Test no 2 (`claudefairplay@hotmail.com`). Résultat : document transitionné `submitted → approved`, `business_event` `document_approved` confirmé avec `actor_id`/`organization_id` corrects et `payload.via_mandate_id` prouvant que le chemin emprunté est bien celui du mandat (pas le repli admin propriétaire). **INC-S07-01 est corrigé et validé en production.** Toutes les données de test supprimées après validation (projet, mandat, participation, document, événement) — aucune donnée résiduelle.
+
+**Limite notée pendant le test** : les organisations réelles du projet CCF (Centre de Consolidation Ferroviaire Québec, Acier Laurentien Inc., RecyclMétal Estrie) n'ont aucun compte utilisateur actif rattaché — même limitation déjà documentée en `INC-S03-09`. Le test a donc utilisé un projet isolé construit sur les organisations de démonstration (`Test Organisation`, `Test no 2`), qui ont de vrais comptes. Un jeu de données pilote complet (compte utilisateur réel par organisation du projet CCF) reste recommandé avant une démonstration externe — déjà noté à plusieurs reprises dans ce registre (§8, Annexe C du cahier fonctionnel).
+
+**État de S07 après cette session : backend complet, corrigé et validé en production.** Reste à construire le frontend `/documents` (brief à donner à Rocket, avec consigne explicite d'utiliser `approve_document()` pour toute transition de statut).
+
 ---
 
 ## 10. Suite de validation automatisée
@@ -355,7 +361,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 ## 11. Prochaines étapes recommandées
 
 1. Écran S07 (`/documents`) — **backend revu et corrigé (§9septies)** ; reste à briefer Rocket pour la construction du frontend, puis appliquer `ROCKET_REVIEW_CHECKLIST.md` à sa revue comme pour S06. S08–S10 restent selon le mapping 30-60-90 du backlog technique (S01-S06 complets : Organisations, Capacités, Opportunités, Mandats).
-2. Déployer sur METALVISION (`supabase db push`) les 3 fichiers correctifs S07 : `20260712100000_ccf_006d_documents_event_types.sql`, `20260712101000_ccf_006e_documents_mandate_approval.sql`, et le commentaire corrigé de `ccf_006c` — puis tester `approve_document()` avec un vrai mandat `approve_documents` avant de considérer le backend S07 comme validé en production (cette session n'a couvert que la revue de code statique, aucun test contre METALVISION).
+2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
 4. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
 5. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
