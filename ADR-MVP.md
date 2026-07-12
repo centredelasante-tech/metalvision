@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), conforme, aucune correction nécessaire — et §9quindecies pour S09 frontend, **complet, corrigé et intégré, 6ᵉ occurrence du patron de régression récurrente (dont une variante inédite ayant réintroduit `INC-S05-02`)**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), conforme, aucune correction nécessaire — §9quindecies-§9sexdecies pour S09 frontend, **complet, corrigé (`INC-S09-01`) et validé de bout en bout en production, 6ᵉ occurrence du patron de régression récurrente** — et §9septdecies pour la revue backend de S01 (Dashboard complet), **conforme, aucune correction nécessaire, prêt pour le frontend**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -589,6 +589,33 @@ La ligne `organization_members` ajoutée temporairement a été supprimée aprè
 
 ---
 
+## 9septdecies. Revue backend S01 (Dashboard complet) — avant construction du frontend, 12 juillet 2026
+
+Référence : backlog technique v1.0, S01 (« Cartes KPI, alertes, projets actifs, documents incomplets, événements récents », M1 partiel / **M3 complet**) ; cahier fonctionnel v1.2, M01 (« Vue d'ensemble des organisations, opportunités, projets, alertes, documents incomplets et événements récents »).
+
+**Clarification de portée majeure (constat, pas un bug) :** la route `/` (« Tableau de bord », `ClientDashboardContent`) existante est **entièrement dédiée au domaine MRV/lots préexistant** (`company_members`, `raw_measurements`, conteneurs, factures) — un domaine métier distinct de MetalTrace CCF construit avant cette mission. Elle ne contient aucune donnée du domaine collaboratif CCF (`ccf_projects`, `documents`, `mandates`, `business_events`). Le « M1 partiel » mentionné dans le backlog fait donc référence à ce dashboard MRV existant, pas à un début de travail CCF. **S01 « complet » signifie ajouter une nouvelle section CCF à cette page — pas remplacer ou modifier les cartes/tableaux MRV existants.**
+
+**Résultat : aucune nouvelle table, aucune nouvelle migration, aucune nouvelle policy RLS nécessaire.** Toutes les données requises existent déjà et sont déjà protégées par des policies revues lors des sessions précédentes (`ccf_projects`/`project_participants` en §9duodecies-§9terdecies, `documents` en §9septies-§9octies, `mandates` en §9bis-§9sexies, `business_events` en §9novies-§9decies).
+
+**Décisions de portée à trancher avant le brief Rocket :**
+
+| Élément | Décision |
+|---|---|
+| Cartes KPI | 4 cartes : **Projets actifs** (`ccf_projects.phase != 'closed'`, visibles selon la RLS déjà en place — coordinateur ou participant actif) ; **Documents en attente** (`documents.status IN ('draft','submitted')`, visibles selon la RLS documents) ; **Mandats en attente** (`mandates.status = 'pending_acceptance'`, où l'organisation de l'utilisateur est `issuer_org_id` ou `receiver_org_id`) ; **Événements (7 derniers jours)** (`business_events.created_at >= now() - interval '7 days'`, visibles selon la RLS déjà en place). |
+| Alertes | Liste combinée de signaux déjà définis ailleurs dans le MVP, **pas une nouvelle notion** : étapes logistiques `blocked` (même critère que le panneau Risques de S05/S09), projets avec `target_end_date` dépassée et `phase != 'closed'`, documents `rejected` récents (7 jours), mandats `active` dont `end_date` est à moins de 14 jours. Alertes multi-projets — nécessite d'interroger `logistics_steps`/`ccf_projects` sans filtrer sur un seul projet (contrairement à `computeProjectRisks`, qui reste utilisé tel quel pour S05/S09 et n'a pas besoin d'être modifié). |
+| Projets actifs (liste) | `ccf_projects` où `phase != 'closed'`, triés par `target_end_date` (les plus proches d'abord), avec lien vers `/projets/:id`. Réutiliser `PHASE_CONFIG`/`PhaseBadge` du pattern déjà établi en S05/S09 si pratique (dupliquer le mapping est acceptable ici, ce n'est pas un calcul de risque partagé). |
+| Documents incomplets (liste) | `documents` où `status IN ('draft','submitted')`, triés par `created_at` DESC, limité à un nombre raisonnable (ex. 10) avec lien vers `/documents`. |
+| Événements récents (liste) | Derniers `business_events` (tous `object_type` confondus, pas un seul objet — donc **ne pas** réutiliser `ObjectTimeline` tel quel, qui est scopé à un objet unique ; s'inspirer de sa présentation (`EventTypeBadge`) mais interroger sans filtre `object_type`/`object_id`), limité à un nombre raisonnable (ex. 10), lien vers `/evenements` pour le journal complet. |
+| Emplacement | Nouvelle section ajoutée à `ClientDashboardContent` (route `/`), **après** les sections MRV existantes (KPI Cards, RecentLotsTable/ContainerGrid) — ne pas les retirer ni les réorganiser. |
+
+**Aucune écriture** sur cet écran — lecture seule, aucun nouvel `event_type`, aucune insertion `business_events`.
+
+**Aucune donnée n'a été touchée sur METALVISION pour cette session — revue de code/backlog uniquement, aucune migration créée.**
+
+**État de S01 après cette session : backend confirmé conforme sans correction nécessaire, prêt pour le brief Rocket sur le frontend.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -604,7 +631,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **résolu, terminé** (§9quaterdecies, §9quindecies, §9sexdecies). Prochains selon la feuille de route 30-60-90 : dashboard complet (S01), puis S10 (`/admin`) complet.
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **résolu, terminé** (§9quaterdecies, §9quindecies, §9sexdecies). Dashboard complet (S01) — **backend revu, conforme sans correction (§9septdecies)** ; reste à briefer Rocket pour le frontend. Prochain après S01 selon la feuille de route 30-60-90 : S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
