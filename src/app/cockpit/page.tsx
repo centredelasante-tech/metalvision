@@ -184,12 +184,19 @@ export default function CockpitPage() {
       if (!user) { setErrorProjects('Non authentifié'); return; }
 
       // Get admin org IDs for this user
-      const { data: memberships } = await supabase
+      // INC-S09-01 : org_role est un ENUM Postgres à 2 valeurs seulement
+      // ('admin', 'membre') — il n'existe pas de valeur 'owner' dans ce
+      // schéma. Le filtre .in('org_role', ['admin', 'owner']) faisait
+      // échouer la requête (22P02: invalid input value for enum org_role)
+      // sans que l'erreur ne soit vérifiée, d'où un cockpit vide silencieux
+      // même pour un vrai admin coordinateur.
+      const { data: memberships, error: memErr } = await supabase
         .from('organization_members')
         .select('organization_id, org_role')
         .eq('user_id', user.id)
         .eq('status', 'active')
-        .in('org_role', ['admin', 'owner']);
+        .eq('org_role', 'admin');
+      if (memErr) throw memErr;
 
       const adminOrgIds = (memberships ?? []).map((m) => m.organization_id);
 

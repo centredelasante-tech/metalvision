@@ -571,6 +571,22 @@ Le diff sur `src/app/projets/[id]/page.tsx` (fichier existant, pas une copie int
 
 ---
 
+## 9sexdecies. Test live S09 (`/cockpit`) — `INC-S09-01` trouvé et corrigé, 12 juillet 2026
+
+Premier test avec `centredelasante@gmail.com` : « Aucun projet disponible » alors que ce compte n'est admin d'aucune organisation coordinatrice — comportement attendu, pas un bug. Pour valider le contenu réel du cockpit, ajout temporaire de ce compte comme `org_role = 'admin'` sur l'organisation coordinatrice du projet réel (Centre de Consolidation Ferroviaire Québec) via `INSERT` direct dans `organization_members` (nettoyage prévu après le test).
+
+**Résultat inattendu : toujours « Aucun projet disponible » après l'ajout.** Diagnostic : `src/app/cockpit/page.tsx` filtrait avec `.in('org_role', ['admin', 'owner'])` — or `org_role` est un `ENUM` Postgres à seulement deux valeurs (`'admin'`, `'membre'`, voir `ccf_002`) ; il n'existe **aucune valeur `'owner'`** dans ce schéma. Le filtre échouait donc systématiquement en base (`22P02: invalid input value for enum org_role: "owner"`), confirmé en reproduisant la requête directement en SQL. Le code ne vérifiait pas `error` sur cette requête (`const { data: memberships } = await supabase...` sans destructurer `error`), donc l'échec était **silencieux** : `memberships` valait `null`, `adminOrgIds` devenait `[]`, et l'écran affichait un état vide propre plutôt qu'une erreur — un vrai coordinateur admin voyait donc « Aucun projet disponible » sans aucun indice qu'il s'agissait d'un bug plutôt que d'un fait.
+
+**`INC-S09-01`.** Note : ce n'est pas une régression du patron récurrent Rocket habituel — c'est un bug neuf, dans du code neuf, non détecté à la revue de code statique (§9quindecies) car la logique semblait raisonnable par analogie avec `isCoordinatorAdmin` de S05 (qui compare `org_role === 'admin' || org_role === 'owner'` — comparaison JS inoffensive contre un type `string`, jamais vraie mais jamais une erreur non plus). Appliquée à un filtre PostgREST sur une colonne `ENUM`, la même logique devient une erreur de requête. Seul un test live avec un compte réellement admin coordinateur a permis de le détecter — confirmation supplémentaire que la revue de code seule ne suffit pas.
+
+**Corrigé** : filtre remplacé par `.eq('org_role', 'admin')` (la seule valeur pertinente pour « administrateur coordinateur », `'membre'` n'y ayant jamais eu sa place) et l'erreur de la requête est maintenant vérifiée (`if (memErr) throw memErr;`), pour qu'une future erreur similaire remonte au lieu d'être masquée par un état vide trompeur.
+
+**Correctif poussé sur `main`, redéploiement et nouveau test live encore à faire** avant de considérer S09 terminé — voir la suite de cette session pour la confirmation. La ligne `organization_members` ajoutée temporairement pour ce test devra être supprimée après validation finale (nettoyage prévu, comme pour les tests multi-comptes précédents).
+
+**État de S09 après cette session : `INC-S09-01` corrigé et prêt à déployer ; validation live finale en attente.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
