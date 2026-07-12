@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — et §9septies pour la revue et la validation en production du backend S07 (Documents), **complet, corrigé et validé**, prêt pour le frontend.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies pour le backend S07 (Documents), **complet, corrigé et validé** — et §9octies pour le frontend S07, **accepté partiellement** (2 fichiers cherry-pickés, PR non fusionné, voir `INC-S07-04`).
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -345,6 +345,37 @@ Suivant la même discipline que S06 (§9bis) : revue complète du backend docume
 
 ---
 
+## 9octies. PR Rocket — frontend S07 (Documents) : accepté partiellement — 12 juillet 2026
+
+Rocket a ouvert une nouvelle branche `rocket-update` (commit `8a7b5bd`, un seul commit, parent = `main` à jour au moment du diff) livrant l'écran `/documents` en réponse au brief (`Brief-Rocket-S07-Documents.md`). **PR revu intégralement avant toute fusion — `git diff origin/main origin/rocket-update` sur l'ensemble des fichiers, conformément à `ROCKET_REVIEW_CHECKLIST.md`.**
+
+**Résultat : le contenu réellement neuf est correct ; le reste du commit contient des régressions sérieuses. Rien fusionné tel quel — 2 fichiers cherry-pickés indépendamment, 1 vrai gap corrigé.**
+
+### Contenu neuf — vérifié correct
+
+| Fichier | Constat |
+|---|---|
+| `src/app/documents/page.tsx` (885 lignes) | Machine à états conforme au brief : `draft→submitted` et `approved/rejected→archived` en `UPDATE` direct + insertion manuelle `business_events` ; `submitted→approved/rejected` **exclusivement** via `approve_document()`, avec commentaire explicite renvoyant à `INC-S06-06` pour justifier l'absence d'insertion manuelle. Visibilité `'project'` masquée dans le formulaire tant que `object_type ≠ 'project'` (MVP-RA-026), avec garde-fou dupliqué à la soumission. Aucun bouton de suppression. Filtrage des documents laissé à la RLS (pas de filtre client redondant). |
+| `src/components/Sidebar.tsx` | Ajout de l'entrée « Documents » à `clientNav` et `adminNav`, groupe `réseau` — diff minimal (2 lignes), rien d'autre touché. |
+
+### INC-S07-03 — Bucket Supabase Storage `documents` jamais configuré
+
+| Code | Constat | Cause racine | Correction |
+|---|---|---|---|
+| INC-S07-03 | `E09-T02` du backlog technique (« Configurer Supabase Storage et lien `storage_path` ») n'a jamais été réalisé, par personne — confirmé par `SELECT * FROM storage.buckets` en production (0 ligne). Le nouvel écran appelle `supabase.storage.from('documents').upload(...)`, qui aurait échoué systématiquement sans bucket ni policies. | Tâche du backlog jamais traitée dans les migrations `ccf_006`/`006b`/`006c` (qui ne couvrent que la table, pas le stockage). | Migration `20260712110000_ccf_006f_documents_storage_bucket.sql` : bucket privé `documents` ; policy `INSERT` gardée par `is_organization_owner()` sur l'org extraite du chemin (`documents/<owner_org_id>/<fichier>`, aucune ligne `documents` n'existe encore à l'upload, donc impossible de déléguer à sa RLS à ce stade) ; policy `SELECT` déléguée à la RLS déjà existante sur `public.documents` via une fonction `SECURITY INVOKER` (pas `DEFINER`) — évite de dupliquer les 3 branches de visibilité une deuxième fois dans `storage.objects`. Aucune policy `UPDATE`/`DELETE` (deny-all, cohérent avec MVP-DA-006). |
+
+### INC-S07-04 — Troisième occurrence du patron « branche construite depuis une copie locale périmée »
+
+| Code | Constat | Détail |
+|---|---|---|
+| INC-S07-04 | Le reste du commit `8a7b5bd` (au-delà des 2 fichiers neufs ci-dessus) régresse silencieusement du contenu déjà corrigé, malgré un parent Git techniquement à jour (`main` HEAD exact) : (1) `ADR-MVP.md` écrasé ~188 lignes en arrière, vers une version antérieure même à la session S06 (absence de `MVP-DA-017/018/019`, `MVP-RA-028/029`, §7bis à §9septies) ; (2) `src/app/mandats/page.tsx` réintroduit le doublon `business_events` d'`INC-S06-06` dans `handleAcceptStandalone`, **et** remplace le routage `decline_mandate`/`decline_project_invitation` (`getAcceptType`) par une logique différente jamais revue ; (3) le commentaire corrigé de `ccf_006c` repasse de `MVP-RA-026` à l'ancien `MVP-RA-028` erroné ; (4) deux anciens fichiers de migration déjà écartés reviennent dans l'arborescence : `20260712020000_s06_mandates_complete.sql` (le tout premier script S06 buggé, `INC-S06-01` à `04`) et `20260712030000_s06_decline_mandate_rpc.sql` (une version antérieure jamais déployée de `decline_mandate`). | **Troisième occurrence exacte du même patron** que `INC-S06-07`/`08` (§9sexies) : un parent de commit à jour n'implique pas que le contenu committé soit à jour — l'agent semble committer l'intégralité de son espace de travail local sans le resynchroniser (`git pull`) avant de partir d'une nouvelle branche. Un simple `git merge-base --is-ancestor` ou une vérification du seul fichier annoncé comme modifié n'aurait rien détecté ici non plus. |
+
+**Décision : aucune fusion de la branche.** Les 2 fichiers vérifiés corrects (`documents/page.tsx`, `Sidebar.tsx`) ont été extraits directement de l'objet Git du commit `8a7b5bd` et appliqués indépendamment sur `main` à jour — jamais via `git merge`/`git pull` de la branche elle-même, pour garantir qu'aucun des 4 éléments régressés ne puisse être réintroduit par accident. PR à fermer sans fusion sur GitHub ; branche à supprimer une fois confirmée ancêtre de `main` (même procédure qu'après `INC-S06-07/08`).
+
+**Action de fond recommandée, au-delà du correctif ponctuel** : ce patron s'est maintenant reproduit 3 fois avec les mêmes symptômes exacts. Une simple checklist de revue ne suffit plus à en réduire le risque côté livraison — la cause se trouve dans le processus de travail de Rocket lui-même (environnement local non resynchronisé avant chaque nouvelle branche), hors du contrôle de cette revue. À signaler explicitement à Rocket comme correctif de processus à faire de son côté, pas seulement comme un bug de plus à corriger après coup.
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -360,11 +391,12 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. Écran S07 (`/documents`) — **backend revu et corrigé (§9septies)** ; reste à briefer Rocket pour la construction du frontend, puis appliquer `ROCKET_REVIEW_CHECKLIST.md` à sa revue comme pour S06. S08–S10 restent selon le mapping 30-60-90 du backlog technique (S01-S06 complets : Organisations, Capacités, Opportunités, Mandats).
+1. Écran S07 (`/documents`) — **backend et frontend complets (§9septies, §9octies)** : bucket Storage déployé, `documents/page.tsx`/`Sidebar.tsx` appliqués sur `main`. Fermer le PR `rocket-update` sans fusion, supprimer la branche une fois confirmée ancêtre de `main`. S08–S10 restent selon le mapping 30-60-90 du backlog technique.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
-3. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
-4. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
-5. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
-6. ~~Clarifier avec Rocket le point de nommage `decline_project_invitation`~~ — **résolu** : `decline_mandate()` créée et déployée directement (voir §9sexies), symétrie accept/decline désormais complète.
-7. Informer Rocket des `INC-S06-07`/`08` (voir §9sexies) avant sa prochaine tentative sur ce point — éviter une nouvelle branche construite sur une copie périmée du dépôt.
-8. Nettoyage mineur reporté (§9septies) : redondance `documents_via_project_ids`/`documents_project_select` dans `ccf_010`, à traiter lors d'un futur passage de consolidation RLS — non bloquant.
+3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
+4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
+5. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
+6. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
+7. ~~Clarifier avec Rocket le point de nommage `decline_project_invitation`~~ — **résolu** : `decline_mandate()` créée et déployée directement (voir §9sexies), symétrie accept/decline désormais complète.
+8. **Signaler explicitement à Rocket le patron `INC-S07-04`** (3ᵉ occurrence du même problème que `INC-S06-07/08`) comme correctif de processus à faire de son côté (resynchroniser son environnement local avant toute nouvelle branche) — au-delà de la revue systématique déjà en place, qui ne fait que limiter les dégâts après coup.
+9. Nettoyage mineur reporté (§9septies) : redondance `documents_via_project_ids`/`documents_project_select` dans `ccf_010`, à traiter lors d'un futur passage de consolidation RLS — non bloquant.

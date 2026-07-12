@@ -40,7 +40,8 @@
 - [ ] Après tout `git pull`/rebase impliquant une branche de Rocket, vérifier qu'aucun contenu déjà retiré n'a été réintroduit silencieusement (`git diff` contre le dernier état connu-bon avant de pousser).
 - [ ] Une fois un PR buggé fermé sans fusion, supprimer la branche distante si son contenu est un ancêtre de `main` (`git merge-base --is-ancestor origin/<branche> origin/main`) — sinon la garder identifiée comme non fusionnée tant qu'elle n'a pas été traitée.
 - [ ] Avant toute revue de contenu, `git diff origin/main origin/<branche>` sur l'**ensemble** des fichiers, pas seulement celui que Rocket dit avoir modifié — une branche peut être techniquement construite sur `main` à jour (`main` ancêtre du commit) tout en réintroduisant des fichiers périmés si l'agent a travaillé depuis une copie locale non synchronisée (`ADR-MVP.md` et l'ancien script S06 buggé réapparus à `INC-S06-07`/`08`).
+- [ ] **Patron récurrent (3 occurrences : `INC-S06-07/08`, `INC-S07-04`)** : un commit avec un parent Git à jour (`main` HEAD exact) peut quand même committer du contenu périmé si l'agent n'a pas resynchronisé son espace de travail local avant de créer la branche — l'ancienneté du *parent* ne garantit rien sur l'ancienneté du *contenu*. Ne jamais se contenter de vérifier que le PR "part de main à jour" ; toujours diffuser fichier par fichier, y compris ceux non mentionnés dans la description du PR. Si ce patron se reproduit une 4ᵉ fois, le signaler comme un problème de processus côté Rocket (resynchronisation avant chaque branche), pas seulement comme un bug de plus à corriger après coup.
 
 ---
 
-*Dernière mise à jour : 12 juillet 2026, suite à la revue backend S07/Documents (`INC-S07-01`, `INC-S07-02`) — voir ADR-MVP.md §9septies.*
+*Dernière mise à jour : 12 juillet 2026, suite à la revue du PR frontend S07/Documents (`INC-S07-03`, `INC-S07-04`) — voir ADR-MVP.md §9octies.*
