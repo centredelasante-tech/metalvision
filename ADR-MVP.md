@@ -581,9 +581,11 @@ Premier test avec `centredelasante@gmail.com` : « Aucun projet disponible » al
 
 **Corrigé** : filtre remplacé par `.eq('org_role', 'admin')` (la seule valeur pertinente pour « administrateur coordinateur », `'membre'` n'y ayant jamais eu sa place) et l'erreur de la requête est maintenant vérifiée (`if (memErr) throw memErr;`), pour qu'une future erreur similaire remonte au lieu d'être masquée par un état vide trompeur.
 
-**Correctif poussé sur `main`, redéploiement et nouveau test live encore à faire** avant de considérer S09 terminé — voir la suite de cette session pour la confirmation. La ligne `organization_members` ajoutée temporairement pour ce test devra être supprimée après validation finale (nettoyage prévu, comme pour les tests multi-comptes précédents).
+**Correctif déployé et retesté en direct** avec le même compte temporairement promu admin coordinateur : sélecteur affichant le projet réel, barre d'avancement à 50 % correctement alignée sur "Exécution", carte Volume traité (57,5 t), carte Valeur de coordination (12 800 $), 0 risque détecté (cohérent avec le test S05 sur le même projet — confirme la parité de calcul via `computeProjectRisks`), détail des risques vide affiché correctement, synthèse direction générée par `buildSummaryText` (« Projet en phase exécution (50 % d'avancement) · 57,5 t traitées · valeur de coordination : 12 800 $ · aucun risque détecté. »), et notes du dernier rapport affichées. **Conforme au brief sur tous les points.**
 
-**État de S09 après cette session : `INC-S09-01` corrigé et prêt à déployer ; validation live finale en attente.**
+La ligne `organization_members` ajoutée temporairement a été supprimée après validation (`DELETE` exécuté dans le SQL Editor Supabase, confirmé par l'utilisateur).
+
+**État de S09 après cette session : complet, corrigé (`INC-S09-01`), et validé de bout en bout en production avec un vrai compte admin coordinateur. Écran terminé.**
 
 ---
 
@@ -602,7 +604,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **backend et frontend revus, corrigés et intégrés (§9quaterdecies, §9quindecies)** ; reste à pousser, fermer/supprimer la PR/branche Rocket, et valider en direct. Prochains selon la feuille de route 30-60-90 : dashboard complet (S01), puis S10 (`/admin`) complet.
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **résolu, terminé** (§9quaterdecies, §9quindecies, §9sexdecies). Prochains selon la feuille de route 30-60-90 : dashboard complet (S01), puis S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
