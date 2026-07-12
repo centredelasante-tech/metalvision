@@ -255,30 +255,39 @@ export default function MandatsPage() {
   const handleAccept = async (mandate: Mandate) => {
     setActionLoading(mandate.id);
     try {
-      // Use RPC for atomic accept (MVP-DA-018)
-      // p_project_id is optional context — pass null if no project linked
-      const { error: err } = await supabase.rpc('accept_project_invitation', {
-        p_mandate_id: mandate.id,
-        p_project_id: '00000000-0000-0000-0000-000000000000', // placeholder — no project context from mandats screen
-      });
-      if (err) {
-        // Fallback: direct update if RPC fails due to missing project_participants
-        const { error: updateErr } = await supabase
-          .from('mandates')
-          .update({ status: 'active', updated_at: new Date().toISOString() })
-          .eq('id', mandate.id);
-        if (updateErr) throw updateErr;
+      // Step 1 — resolve project_id from project_participants (MVP-DA-018)
+      const { data: ppRow } = await supabase
+        .from('project_participants')
+        .select('project_id')
+        .eq('mandate_id', mandate.id)
+        .maybeSingle();
 
-        const { data: { user } } = await supabase.auth.getUser();
-        await supabase.from('business_events').insert({
-          event_type: 'mandate_accepted',
-          object_type: 'mandate',
-          object_id: mandate.id,
-          actor_id: user?.id,
-          organization_id: mandate.receiver_org_id,
-          payload: { mandate_id: mandate.id },
+      if (ppRow?.project_id) {
+        // Mandat lié à une invitation de projet → RPC complète
+        const { error: err } = await supabase.rpc('accept_project_invitation', {
+          p_mandate_id: mandate.id,
+          p_project_id: ppRow.project_id,
         });
+        if (err) throw err;
+      } else {
+        // Mandat autonome (pas de project_participants) → RPC simple
+        const { error: err } = await supabase.rpc('accept_mandate', {
+          p_mandate_id: mandate.id,
+        });
+        if (err) throw err;
       }
+
+      // Emit business event
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('business_events').insert({
+        event_type: 'mandate_accepted',
+        object_type: 'mandate',
+        object_id: mandate.id,
+        actor_id: user?.id,
+        organization_id: mandate.receiver_org_id,
+        payload: { mandate_id: mandate.id },
+      });
+
       await loadData();
       setSelectedMandate(null);
     } catch (e: unknown) {
