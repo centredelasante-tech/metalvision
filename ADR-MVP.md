@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — et §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), **conforme, aucune correction nécessaire, prêt pour le frontend**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — §9terdecies pour S05 (Projet CCF) frontend, **complet, corrigé (`INC-S05-02`) et validé de bout en bout en production, 5ᵉ occurrence du patron de régression récurrente** — §9quaterdecies pour la revue backend de S09 (Cockpit exécutif), conforme, aucune correction nécessaire — et §9quindecies pour S09 frontend, **complet, corrigé et intégré, 6ᵉ occurrence du patron de régression récurrente (dont une variante inédite ayant réintroduit `INC-S05-02`)**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -540,6 +540,37 @@ Contrairement à E12-T01 (`value_reports`, une vraie migration) et E12-T02 (US-0
 
 ---
 
+## 9quindecies. Revue PR Rocket S09 (`/cockpit`) — 12 juillet 2026
+
+PR reçue, **non fusionnée** (branche `rocket-update` récupérée via `FETCH_HEAD`, jamais mergée directement). Diff complet de la branche revu fichier par fichier avant toute décision.
+
+**Résultat : 6ᵉ occurrence confirmée du patron de régression récurrent, plus une variante inédite de ce même patron qui a réintroduit `INC-S05-02` (déjà corrigé en §9terdecies) au milieu d'un changement par ailleurs légitime. Les fichiers neufs et légitimes ont été retenus, corrigés pour cette régression ponctuelle, et intégrés ; la branche n'a pas été fusionnée.**
+
+### Régression récurrente — 6ᵉ occurrence (contenu périmé classique)
+
+Comme pour les 5 occurrences précédentes : `ADR-MVP.md` (386 lignes écrasées par une version antérieure), `supabase/migrations/20260710006200_ccf_006c_documents_project_visibility_check.sql` (revert identique du commentaire `MVP-RA-028` → `MVP-RA-026`), `src/app/mandats/page.tsx` (doublon `business_events` d'`INC-S06-06` et `handleDecline` non symétrique, tous deux déjà corrigés), et les deux migrations fantômes `20260712020000_s06_mandates_complete.sql`/`20260712030000_s06_decline_mandate_rpc.sql` déjà remplacées sur `main`. Aucun de ces fichiers n'a été retenu.
+
+### Variante inédite du patron — réintroduction ponctuelle d'`INC-S05-02` dans un diff par ailleurs légitime
+
+Le diff sur `src/app/projets/[id]/page.tsx` (fichier existant, pas une copie intégrale périmée) partait pourtant du bon blob parent (`e1ae0a7`, la version corrigée d'`INC-S05-02` déployée en §9terdecies) — contrairement aux 6 occurrences précédentes où le fichier entier était périmé dès le départ. Mais le hunk touchant `handleVRSave()` a **annulé la correction `INC-S05-02`** en cours de route : suppression de la capture `valueReportId` (`.select('id').single()` sur l'insert), retour à `object_id: project.id` pour l'événement `value_report_generated`. Cause probable : régénération du bloc environnant à partir d'une représentation interne périmée du fichier plutôt qu'un patch ciblé sur le seul bloc "Risks" à modifier — la partie du diff qui *devait* changer (le calcul des risques, remplacé par `computeProjectRisks`) est correcte, mais elle a entraîné une réécriture non désirée d'un bloc voisin sans rapport avec la tâche demandée.
+
+**Corrigé avant fusion** : le fichier intégré ne reprend de la branche Rocket que les deux changements réellement demandés — l'import de `computeProjectRisks` et le remplacement du calcul de risques inline par l'appel à la fonction partagée — appliqués manuellement sur la version `main` déjà correcte, en laissant `handleVRSave()` intact (`valueReportId`/`object_id: valueReportId` préservés). Vérifié explicitement après application : aucune autre différence avec la version corrigée précédente.
+
+### Fichiers retenus (revus contre `Brief-Rocket-S09-Cockpit.md`)
+
+| Fichier | Verdict |
+|---|---|
+| `src/lib/projectRisks.ts` (64 lignes, nouveau) | Conforme — extraction exacte de la logique déjà écrite en S05 (étapes `blocked`, `target_end_date` dépassée, participants `declined`), aucune divergence de résultat, exactement ce que demandait le brief. |
+| `src/app/cockpit/page.tsx` (550 lignes, nouveau) | Conforme — sélecteur de projet filtré aux admins d'organisation coordinatrice (`org_role IN ('admin','owner')` sur `organization_members`, même filtre que `isCoordinatorAdmin`), pas de route paramétrée ; avancement calculé via un mapping `phase` → 0/25/50/75/100 % ; volume/valeur tirés du dernier `value_reports` (`created_at DESC`, `limit(1)`, `maybeSingle()`), pas d'agrégation, état vide explicite (« Aucun rapport de valeur disponible ») ; risques via `computeProjectRisks` partagé ; synthèse direction générée côté frontend (`buildSummaryText`), aucun appel IA ; **aucune écriture** — pas d'`insert`/`update`, pas de `business_events`, conforme à l'écran en lecture seule demandé. |
+| `src/app/projets/[id]/page.tsx` (diff) | Conforme **après retrait de la réintroduction d'`INC-S05-02`** — voir ci-dessus. Le remplacement du calcul de risques par `computeProjectRisks` est correct et bienvenu (élimine le risque de divergence future entre S05 et S09, exactement la recommandation du brief). |
+| `src/components/Sidebar.tsx` | Conforme — entrée "Cockpit" (`PresentationChartLineIcon`, `/cockpit`) ajoutée après "Événements" dans `clientNav` et `adminNav`, aucune régression, 6ᵉ diff Sidebar consécutif propre. |
+
+**Ces 4 fichiers ont été cherry-pickés/corrigés directement sur `main`** via `git hash-object`/`git update-index` (jamais de fusion de la branche `rocket-update`). Aucune nouvelle migration requise pour cet écran, conformément à la revue backend (§9quaterdecies) — confirmé : le diff complet de la branche ne contient aucun fichier sous `supabase/migrations/` en dehors des deux fantômes déjà rejetés.
+
+**État de S09 après cette session : backend et frontend tous deux revus, corrigés et intégrés à `main`. Reste à pousser, fermer/supprimer la PR/branche Rocket, et valider en direct dans le navigateur.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -555,7 +586,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). Écran S09 (`/cockpit`) — **backend revu, conforme sans correction (§9quaterdecies)** ; reste à briefer Rocket pour le frontend. Prochains après S09 selon la feuille de route 30-60-90 : dashboard complet (S01), puis S10 (`/admin`) complet.
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **résolu, terminé** (§9duodecies, §9terdecies). ~~Écran S09 (`/cockpit`)~~ — **backend et frontend revus, corrigés et intégrés (§9quaterdecies, §9quindecies)** ; reste à pousser, fermer/supprimer la PR/branche Rocket, et valider en direct. Prochains selon la feuille de route 30-60-90 : dashboard complet (S01), puis S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
