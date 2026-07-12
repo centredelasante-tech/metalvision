@@ -423,6 +423,31 @@ Rocket a de nouveau ouvert `rocket-update` (commit `21e6659`, parent = `main` HE
 
 ---
 
+## 9undecies. Tests live complémentaires — S06 (multi-comptes) et S08 (UI) — 12 juillet 2026
+
+Fermeture de deux trous de test identifiés en faisant le bilan de la couverture réelle de la session : la suite automatisée (63/63, §10) ne couvre que les opportunités/capacités, et plusieurs écrans n'avaient été validés qu'en lecture de code ou en base directe (rôle `postgres`, qui contourne RLS), jamais avec un vrai compte authentifié dans le navigateur.
+
+### S06 (Mandats) — test RLS multi-comptes, jamais fait depuis §9quater
+
+Noté comme « reste à faire » à la session §9quater (test DB-only sur METALVISION, rôle `postgres`) et toujours pas complété après la revue frontend de §9quinquies (qui a validé par lecture de code, pas par test live). Comblé maintenant avec deux comptes réels (`centredelasante@gmail.com`, admin de Test Organisation et Test no 2 ; `claudefairplay@hotmail.com`, membre non-admin de Test no 2 seulement) :
+
+| Étape | Compte | Résultat |
+|---|---|---|
+| `draft → pending_acceptance` (émission) | `centredelasante` (admin Test Organisation) | Réussi — première transition d'état jamais déclenchée par un compte authentifié réel plutôt que par `postgres` ou un environnement simulé. |
+| Tentative d'action sur le mandat reçu | `claudefairplay` (membre non-admin, Test no 2) | **Aucun bouton Accepter/Refuser affiché** — le frontend respecte la restriction admin-seulement (`INC-S06-03`) ; aucune tentative de contournement au niveau RPC n'a été nécessaire pour confirmer le comportement attendu côté UI. |
+| `pending_acceptance → active` (acceptation) | `centredelasante` (admin Test no 2) | Réussi. |
+| Vérification `business_events` | — | Exactement 2 lignes (`mandate_issued`, `mandate_accepted`), aucun doublon — confirme `INC-S06-06` avec un vrai compte, pas seulement en lecture de code. |
+
+**S06 est maintenant testé de bout en bout avec de vrais comptes authentifiés, pas seulement en base directe ou en lecture de code.** Données de test supprimées après validation (mandat, y compris le brouillon créé dans le mauvais sens lors du premier essai, et ses `business_events`).
+
+### S08 (Événements) — test live de l'écran, jamais fait
+
+La revue de `INC-S08-01` (§9decies) n'avait porté que sur le code du PR, jamais sur l'écran réellement ouvert dans un navigateur. Test rapide effectué : `/evenements` affiche correctement le journal (11 événements au moment du test), badges de type colorés avec libellés français, IDs tronqués, et le filtre "Type d'objet" fonctionne (11 → 3 événements en sélectionnant "Organisation", chip actif affiché, bouton "Effacer les filtres" apparu). **Confirmé fonctionnel en direct**, pas seulement par lecture de code.
+
+**État de la couverture de test après cette session : S02 à S08 ont tous été validés par un test réel (navigateur et/ou base directe avec de vrais comptes), au-delà de la seule lecture de code. La suite automatisée (§10, 63/63) reste datée d'avant S06 et ne couvre pas les mandats/documents/événements — à rejouer ou étendre si une validation automatisée complète est requise avant une démonstration externe.**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
