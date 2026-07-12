@@ -32,11 +32,25 @@
 -- de test/démo, pas de perte de données réelles). Les tables sont
 -- recréées vides.
 --
--- Dépendances déjà présentes en production (vérifié) :
---   is_company_member(), is_company_owner()  — réappliquées en 20260711000000
+-- Dépendances déjà présentes en production (vérifié par inventaire réel
+-- information_schema.tables le 12 juillet, pas seulement par lecture des
+-- migrations — voir correctif ci-dessous) :
+--   is_company_member(), is_company_owner()  — définies dans 20260710999000,
+--     interrogent déjà organization_members (pas company_members)
 --   is_admin_from_auth()                      — réappliquée en 20260710999100
---   companies                                 — réappliquée en 20260711000000
+--   organizations                             — créée DIRECTEMENT par
+--     20260710999000 (pas via un rename depuis companies)
 --   project_activity_logs                     — réappliquée en 20260710999100
+--
+-- CORRECTIF (12 juillet, après premier échec de push) : la première version
+-- de ce fichier référençait `public.companies(id)` en FK, en supposant que
+-- 20260711000000_reapply_invitations_five_files.sql avait recréé cette
+-- table. Le push a échoué avec `relation "public.companies" does not
+-- exist` — confirmé par inventaire réel que cette migration n'a en fait
+-- jamais été appliquée en production, malgré sa présence dans l'historique
+-- git. La table réellement utilisée par tout le domaine CCF est
+-- `organizations` (créée directement par le reset, pas par renommage).
+-- Les 3 FK `company_id` ci-dessous pointent donc vers `organizations(id)`.
 -- ============================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -72,7 +86,7 @@ $$;
 CREATE TABLE IF NOT EXISTS public.raw_measurements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL,
-    company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
     metal_type_predicted TEXT,
     confidence NUMERIC(4,3),
     width_cm NUMERIC(10,2),
@@ -244,7 +258,7 @@ ON public.object_profiles FOR SELECT TO anon USING (true);
 
 CREATE TABLE IF NOT EXISTS public.containers (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id  UUID        NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+    company_id  UUID        NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     qr_code     TEXT        NOT NULL,
     name        TEXT        NOT NULL,
     location    TEXT,
@@ -294,7 +308,7 @@ CREATE INDEX IF NOT EXISTS idx_raw_measurements_container_id ON public.raw_measu
 CREATE TABLE IF NOT EXISTS public.scan_events (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     container_id    UUID        NOT NULL REFERENCES public.containers(id) ON DELETE CASCADE,
-    company_id      UUID        NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+    company_id      UUID        NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     user_id         UUID        NOT NULL,
     action_type     TEXT        NOT NULL,
     gps_lat         NUMERIC(10,7),
