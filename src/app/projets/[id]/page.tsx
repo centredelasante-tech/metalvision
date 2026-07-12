@@ -1356,4 +1356,17 @@ export default function ProjetDetailPage() {
 
       </div>
 
-      {/* Document uploader mod
+      {/* Document uploader modal */}
+      {showDocUploader && (
+        <ProjectDocumentUploader
+          projectId={projectId}
+          myAdminOrgIds={myAdminOrgIds}
+          organizations={organizations}
+          actorId={actorId}
+          onClose={() => setShowDocUploader(false)}
+          onUploaded={() => { setShowDocUploader(false); loadData(); }}
+        />
+      )}
+    </AppLayout>
+  );
+}
