@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), et §9bis à §9quinquies pour l'écran S06 (Mandats) — backend et frontend, **désormais complet et validé**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §9). Mise à jour du 11 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, et §8 pour l'incident de test end-to-end S03.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -22,9 +22,6 @@
 | **MVP-DA-014** *(nouveau)* | **Fonctions RLS utilitaires (`user_org_ids()`, `user_project_ids()`) dans le schéma `public`**, jamais `auth`. | Cohérent avec toutes les fonctions helper préexistantes du projet (`is_platform_superadmin()`, `is_aggregator_admin()`, etc.), et évite les restrictions Supabase sur les écritures dans le schéma `auth`. |
 | **MVP-DA-015** *(nouveau)* | **Aucun type ENUM Postgres partagé pour un `status`/`phase` générique** — `TEXT` + `CHECK` propre à chaque table. | Un ENUM Postgres est un type unique à liste de valeurs fixe ; il ne peut pas servir plusieurs tables avec des valeurs différentes. Cohérent avec le pattern déjà dominant dans le schéma existant (`raw_measurements.status`, `credit_lots.status`, etc., tous en texte/CHECK). Des ENUM restent légitimes pour des types à vocation unique et stable (`mandate_scope`, `document_visibility`, `logistics_step_type`, `ccf_event_type`). |
 | **MVP-DA-016** *(nouveau)* | **Seed de démonstration isolé hors du dossier `migrations/`** (`supabase/seed.sql` ou `supabase/seeds/`). | Empêche l'injection automatique de données de démonstration en production par le pipeline CI/CD standard. |
-| **MVP-DA-017** *(nouveau)* | **Expiration des mandats calculée à la volée, aucun job planifié en MVP.** `mandates.status` peut rester `active` même après `end_date` ; l'UI et les RLS doivent utiliser la notion de mandat *effectif*, pas seulement le statut physique. | Fonction `is_mandate_effective(p_mandate_id uuid)` et vue `active_effective_mandates`, toutes deux basées sur `status = 'active' AND (end_date IS NULL OR end_date >= current_date)`. Aucun événement `mandate_expired` ajouté au catalogue `event_type` pour le MVP. |
-| **MVP-DA-018** *(nouveau)* | **Acceptation d'une invitation de projet via RPC transactionnelle unique**, pas via trigger de propagation entre `mandates` et `project_participants`. La RPC ne suppose jamais qu'une ligne `project_participants` existe déjà. | Fonction `accept_project_invitation(p_mandate_id uuid, p_project_id uuid)` (`SECURITY DEFINER`) : active le mandat, puis `INSERT ... ON CONFLICT (project_id, organization_id) DO UPDATE` sur `project_participants` (crée la ligne si absente, l'active sinon), rattache `mandate_id`, émet `mandate_accepted` — le tout dans une seule transaction. Un trigger cacherait trop de logique métier entre les deux tables ; la RPC explicite reste lisible, testable et auditée. |
-| **MVP-DA-019** *(nouveau)* | **Séparation stricte entre mandat générique et invitation de projet.** Un mandat lié à une invitation de projet (`project_participants.mandate_id` existe) ne doit jamais être accepté sans contexte projet explicite — l'écran `/mandats` autonome ne doit pas appeler `accept_project_invitation()` en résolvant silencieusement le `project_id` par jointure. Un mandat générique (aucune ligne `project_participants`) s'accepte directement depuis `/mandats`. | `accept_mandate(p_mandate_id uuid)` créée pour le cas générique (statut → `active`, sans toucher `project_participants`). `accept_project_invitation(p_mandate_id, p_project_id)` reste réservée au contexte projet explicite (écran `/projets/:id`, S05). Dans `/mandats`, un mandat lié à un projet affiche « Voir le projet »/« Ouvrir l'invitation », pas un bouton d'acceptation direct. Le refus (`decline_project_invitation`), lui, n'est **pas** séparé par branche — point de vigilance noté en §9quinquies, pas un bug. |
 
 ---
 
@@ -40,8 +37,6 @@
 | MVP-RA-025 | **Séparation coordonnateur / candidat.** Une organisation coordonnatrice d'une opportunité ne peut pas être candidate sur cette même opportunité. Limitation volontaire du MVP (neutralité du coordonnateur, confiance inter-organisations, simplicité RLS) ; à lever en V2 avec déclaration de conflit d'intérêts et gouvernance renforcée. | Trigger `enforce_no_self_candidacy()` (`BEFORE INSERT` sur `opportunity_capabilities`) rejette toute association où `opportunities.coordinator_org_id = capabilities.organization_id`. |
 | MVP-RA-026 | **Cohérence `visibility`/`object_type` pour `project`.** `documents.visibility = 'project'` n'est autorisé que si `documents.object_type = 'project'` — un document rattaché à une capacité, une organisation, une opportunité ou un mandat ne devient jamais visible à tout un projet par héritage implicite. | Contrainte `documents_project_visibility_requires_project_object`. Pour partager un document lié à une capacité dans le contexte d'un projet, il doit être déposé explicitement comme document de projet (catégorie `capability_evidence`, `logistics_proof`, etc.). |
 | MVP-RA-027 | **Confidentialité restrictive, applicable à tout `object_type`.** Un document `confidential` peut être rattaché à n'importe quel objet métier gouverné — la confidentialité n'est jamais une portée de partage, elle réduit toujours l'accès par rapport à la visibilité normale, jamais l'inverse. Pour `value_report` spécifiquement : confidentiel = coordonnateur du projet seulement, jamais les participants actifs (aucun mécanisme de destinataires nommés en MVP, reporté en V2). | Policy `documents_confidential_select` (organization/capability/mandate) + policy complémentaire `documents_confidential_value_report_select` (jointure `value_reports`/`ccf_projects`) — deux policies permissives combinées par OU logique. |
-| **MVP-RA-028** *(nouveau)* | **Interdiction de l'auto-mandat.** Une organisation ne peut pas se mandater elle-même (`issuer_org_id ≠ receiver_org_id`). Un mandat encadre une relation entre deux organisations distinctes ; une autorisation interne (membre à membre) relève de `organization_members`/`org_role`/`project_role`, pas d'un mandat. Cohérent avec l'esprit de séparation déjà établi par MVP-RA-025 (coordonnateur/candidat). | Contrainte `mandates_different_orgs` (`CHECK (issuer_org_id != receiver_org_id)`) sur la table `mandates` — nom réel confirmé en base au test §9quater, différent du nom documenté initialement (`mandates_issuer_receiver_distinct`), écart cosmétique sans impact fonctionnel. |
-| **MVP-RA-029** *(nouveau)* | **Gel des champs structurants d'un mandat actif.** Dès que `mandates.status = 'active'`, les colonnes `mandate_scope`, `permissions`, `issuer_org_id` et `receiver_org_id` deviennent immuables. Pour changer la portée ou les actions d'un mandat en cours, il faut le révoquer et créer un nouveau mandat, soumis à une nouvelle acceptation explicite du récepteur — évite qu'un mandat accepté pour une portée limitée s'élargisse silencieusement sans consentement. | Trigger `enforce_mandate_active_freeze()` (`BEFORE UPDATE` sur `mandates`) rejette toute modification de ces 4 colonnes lorsque `OLD.status = 'active' OR NEW.status = 'active'` (condition élargie suite à `INC-S06-02` — voir §9bis). |
 
 ---
 
@@ -117,7 +112,7 @@ Au cours de la validation pré-migration, plusieurs migrations CCF (`ccf_003`, `
 
 ## 7. Incident — test end-to-end S02 (écran Organisations)
 
-Premier test manuel dans le navigateur de l'écran S02 (Organisations), couvrant la création d'organisation, l'invitation d'un membre et l'acceptation d'invitation. Objectif : valider en conditions réelles ce que la lecture de code seule ne peut pas garantir — RLS, triggers, RPC et policies ne se comportent pas toujours comme prévu une fois exécutés avec le rôle `authenticated` réel (voir limite connue du script de validation, §10).
+Premier test manuel dans le navigateur de l'écran S02 (Organisations), couvrant la création d'organisation, l'invitation d'un membre et l'acceptation d'invitation. Objectif : valider en conditions réelles ce que la lecture de code seule ne peut pas garantir — RLS, triggers, RPC et policies ne se comportent pas toujours comme prévu une fois exécutés avec le rôle `authenticated` réel (voir limite connue du script de validation, §8).
 
 **Résultat : 9 bugs réels trouvés et corrigés, aucun détectable par simple lecture de code.**
 
@@ -181,125 +176,7 @@ Suite à la répétition de l'anti-pattern sur 3 paires de tables distinctes en 
 
 ---
 
-## 9. Test end-to-end S04 (écran Opportunités) — 12 juillet 2026
-
-Troisième test manuel end-to-end, portant cette fois sur l'écran S04 (Opportunités), en avance sur la roadmap 30-60-90 (S04 n'est officiellement prévu qu'en phase Jours 31-60, mais construit et testé dès maintenant par souci de continuité avec les Capacités déjà testées à la session S03).
-
-**Résultat : aucun bug trouvé.** Contrairement aux sessions S02 et S03 (9 bugs chacune), l'écran S04 fonctionnait déjà correctement dès le premier test — signe que les corrections RLS appliquées la veille sur `opportunities` (INC-S03-07) ont tenu, et que l'écran avait été construit correctement en amont par l'agent.
-
-**Point de méthode notable** : l'agent (Rocket) a affirmé d'entrée que l'écran S04 était « déjà entièrement implémenté — aucun changement nécessaire », avec des détails précis (nom de fichier, nombre de lignes). Cette affirmation n'a été acceptée qu'après vérification concrète (ouverture de l'URL, test réel dans le navigateur) — cohérent avec la leçon retenue à la session S03 (une affirmation de l'agent doit toujours être vérifiée par une action concrète). Cette fois, l'affirmation s'est révélée exacte, contrairement à celle faite pour S03 la veille.
-
-**Étapes validées dans l'interface réelle, avec vérification en base à chaque étape :**
-
-| Étape | Résultat |
-|---|---|
-| Route `/opportunities` et lien menu latéral | Existants, fonctionnels — filtres de statut (Brouillon, Qualifiée, Convertie, Fermée, Archivée) affichés correctement même à 0 |
-| Création d'une opportunité (`title`, `description`, `region`, `target_volume`, `priority`) par le coordonnateur | Réussie ; statut initial `draft` confirmé en base |
-| Émission de l'événement `opportunity_created` dans `business_events` | Confirmée ; `payload` contient `title`/`status` |
-| Qualification (`draft → qualified`), réservée au coordonnateur/admin | Réussie dans l'UI, avec message explicite (« Réservée au coordonnateur ») |
-| Émission de l'événement `opportunity_qualified` | Confirmée ; `payload` contient `previous_status`/`new_status`, utile pour un futur historique |
-| Vue « Capacités candidates » (état vide) | Affichage propre, cohérent |
-| Blocage `MVP-RA-025` (auto-candidature) sur une capacité de la même organisation | Reconfirmé, cohérent avec le comportement déjà validé à la session S03 |
-| Association réussie d'une capacité `qualified` d'une **autre** organisation | Non retestée dans l'UI (organisation candidate sans compte utilisateur disponible, même limitation qu'à la session S03) — jugée suffisamment couverte par la validation SQL directe déjà faite la veille sur le même mécanisme |
-
-**Nettoyage effectué** : opportunité de test et événements `business_events` associés supprimés après validation, aucune donnée résiduelle en production.
-
-**Aucune action corrective requise** pour cette session. Documentée ici principalement pour la continuité de la couverture de test entre les sessions.
-
----
-
-## 9bis. Revue de code S06 (Mandats) — backend, 12 juillet 2026
-
-Contrairement aux sessions S02-S04 (test manuel dans le navigateur après déploiement), cette session porte sur la **revue et le test du script de migration produit par Rocket avant fusion** — le code n'a pas encore été déployé sur staging. Une base PostgreSQL 16 locale a été instanciée pour simuler l'environnement Supabase (schéma `auth`, rôles `authenticated`/`anon`/`service_role`, mock de `auth.uid()` pilotable par session), avec une baseline reproduisant l'état attendu de `CCF-003` avant application du script S06.
-
-**Résultat : 4 bugs réels trouvés, tous reproduits par des requêtes SQL directes puis corrigés.** Contrairement aux sessions précédentes, aucun bug ne touchait l'UI (pas encore construite) — tous relevaient de la conception RLS/trigger.
-
-| Code | Constat | Cause racine | Correction |
-|---|---|---|---|
-| INC-S06-01 | Aucune policy RLS ne permet la transition `draft → pending_acceptance` (émission du mandat). L'émetteur ne peut donc jamais faire sortir un mandat de l'état `draft` — le workflow est bloqué dès la première étape. | Policy manquante : les deux seules policies UPDATE couvrent l'acceptation (récepteur) et la révocation (émetteur vers `revoked` uniquement) ; personne ne peut faire `draft → pending_acceptance`. | Policy `mandates_update_issuance_by_issuer` ajoutée (`USING status='draft'`, `WITH CHECK status='pending_acceptance'`), réservée à l'admin de l'org émettrice (voir INC-S06-03). |
-| INC-S06-02 | Le récepteur peut élargir `mandate_scope`/`permissions` **au moment même** où il accepte un mandat (`pending_acceptance → active`), contournant l'esprit de `MVP-RA-029`. Testé et reproduit : `UPDATE mandates SET status='active', mandate_scope='financier' WHERE ...` réussissait avant correction. | Le trigger `enforce_mandate_active_freeze()` ne bloquait que si `OLD.status = 'active'` — il ne couvrait pas la transition *entrante* vers `active`, seulement les mandats déjà actifs. | Condition du trigger élargie à `OLD.status = 'active' OR NEW.status = 'active'` — bloque désormais aussi bien la modification d'un mandat déjà actif que toute tentative de changer ces 4 champs pendant la transition qui l'active. |
-| INC-S06-03 | N'importe quel membre actif d'une organisation (pas seulement l'admin) peut créer, accepter ou révoquer un mandat — au niveau des policies RLS **et** des deux RPC. Contraire à la matrice de permissions du cahier §7.2 (« Mandat : Admin org. → Créer/valider pour son org. »). Reproduit avec un membre `org_role='membre'` qui a pu créer, puis accepter, un mandat sans blocage. | Les policies et les RPC utilisaient `user_org_ids()` (tout membre actif) plutôt qu'une vérification d'admin. La fonction `is_org_admin()` existe pourtant déjà dans le projet (créée à `INC-S02-07`) et n'a pas été réutilisée ici. | Policies `mandates_insert_issuer_admin`, `mandates_update_issuance_by_issuer`, `mandates_update_acceptance_by_receiver`, `mandates_update_revocation_by_issuer` réécrites avec `is_org_admin(...)`. RPC `accept_project_invitation`/`decline_project_invitation` : ajout d'une vérification explicite `is_org_admin(receiver_org_id)` en plus de l'appartenance. La lecture (`SELECT`) reste ouverte à tout membre actif, conforme à la matrice (« Lecture si autorisé »). |
-| INC-S06-04 | Observation structurelle (pas un bug isolé, un patron à surveiller) : PostgreSQL combine les clauses `WITH CHECK` de **toutes** les policies UPDATE permissives applicables par OR, pas seulement celle dont le `USING` a sélectionné la ligne. Conséquence démontrée : l'émetteur (dont le `USING` de la policy de révocation correspond) a pu modifier `end_date` sur un mandat `active` sans le révoquer, car le `WITH CHECK` de la policy d'acceptation (`status IN ('active','revoked')`) était satisfait par OR même si son propre `USING` (côté récepteur) ne correspondait pas à cette ligne. | Plusieurs policies UPDATE sur la même table, avec des `WITH CHECK` qui se chevauchent sur les mêmes valeurs de `status`, créent des combinaisons de droits non prévues individuellement par chaque policy. | Le trigger de gel (INC-S06-02) neutralise l'impact concret sur les 4 champs sensibles. Aucune correction supplémentaire appliquée pour `start_date`/`end_date` (hors du périmètre de `MVP-RA-029`, jugé acceptable que l'émetteur ajuste ces dates). **Point de vigilance à documenter pour toute nouvelle table à policies UPDATE multiples** : préférer une seule policy par table avec toute la logique de transition explicite, ou un trigger faisant autorité sur les champs sensibles plutôt que de compter sur des `WITH CHECK` mutuellement exclusifs. |
-
-**Méthode de test** : environnement PostgreSQL 16 local, 6 organisations et 8 comptes utilisateurs simulés (admins et membres non-admins), 8 mandats de test couvrant tout le cycle de vie (`draft → pending_acceptance → active → revoked`, refus direct, expiration `end_date`, auto-mandat, accès inter-organisation). Script rejoué deux fois pour confirmer l'idempotence. `pg_policies` audité après correction, aucune récursion introduite.
-
-**État après correction** : les 4 bugs sont corrigés et revalidés par re-test direct (nouvelles organisations, nouveaux mandats, pour éviter toute contamination par les données du premier passage). Aucune régression détectée sur les comportements déjà validés (RT-07, `MVP-DA-017`, isolation inter-organisations, révocation).
-
-**Nettoyage** : base de test locale, aucune donnée n'a touché Supabase — cette revue a eu lieu **avant** toute fusion/déploiement, contrairement aux sessions S02-S04.
-
----
-
-## 9ter. Dérive découverte — `is_org_admin()` absente des migrations versionnées — 12 juillet 2026
-
-Le garde-fou ajouté à la migration S06 (§0 : vérification de l'existence de `public.is_org_admin(uuid)` avant d'exécuter le reste du script) a révélé que cette fonction — documentée dans ce registre comme créée à `INC-S02-07` — **n'existe dans aucun fichier de migration versionné du dépôt** (`supabase/migrations/`). Elle a donc soit été appliquée directement dans le SQL Editor Supabase hors migration, soit perdue lors du `DROP SCHEMA public CASCADE` de l'incident §6 et jamais réintégrée — exactement le type de régression tardive déjà anticipé dans les leçons retenues de la session S02 (*« une vérification exhaustive post-reset (fonctions, GRANTs, RPC) serait utile avant de considérer un reset de schéma comme totalement résorbé »*).
-
-| Code | Constat | Cause probable | Correction |
-|---|---|---|---|
-| INC-S06-05 | `public.is_org_admin(p_organization_id)` absente de tous les fichiers `.sql` versionnés, alors que documentée comme livrée à `INC-S02-07` et réutilisée depuis (S06, et potentiellement `organizations_admin_update` — voir point de vigilance §7bis). | SQL Editor Supabase non versionné, ou perte lors du reset de schéma de l'incident §6. | Migration corrective `00_fix_is_org_admin.sql` créée : recrée uniquement la fonction (`SECURITY DEFINER`, `STABLE`, `SET search_path = public`), testée et confirmée fonctionnelle en environnement PostgreSQL 16 local, isolément puis enchaînée avec la migration S06 complète. |
-
-**Portée volontairement limitée de la correction** : ce fichier ne touche **pas** aux policies `org_members_admin_insert`/`_update`, que l'ADR indique avoir été « réécrites pour appeler » `is_org_admin()` à `INC-S02-07`. Puisque la fonction elle-même était absente des migrations, ces deux policies pourraient être dans le même cas — jamais matérialisées en migration, ou encore sur l'ancienne logique tautologique de l'incident. Une requête de diagnostic (`SELECT ... FROM pg_policies WHERE tablename = 'organization_members'`) est fournie en commentaire dans le fichier correctif pour vérifier leur état réel avant toute intervention supplémentaire — les recréer à l'aveugle sans connaître la logique exacte du trigger d'`INC-S02-05` risquerait de réintroduire un bug plutôt que de le corriger.
-
-**Diagnostic exécuté le 12 juillet 2026 — résultat : cas (a) confirmé.** Les 5 policies réelles de `organization_members` référencent bien `is_org_admin(organization_id)` (`org_members_admin_insert`, `org_members_admin_update`) exactement comme décrit dans ce registre — aucune trace de la logique tautologique d'origine. Elles n'étaient pas bogue mais **inertes** : `CREATE POLICY` référençant une fonction inexistante échoue à la création (reproduit expérimentalement), ce qui confirme qu'`is_org_admin()` existait bien en base au moment de leur création — cohérent avec l'hypothèse « appliquée hors migration ». Conséquence plus large que prévu : un rebuild complet du schéma depuis les migrations versionnées aurait échoué à *recréer* ces policies, pas seulement à les exécuter à l'exécution.
-
-Revalidé en environnement PostgreSQL 16 local avec les 5 policies exactes : après application de `00_fix_is_org_admin.sql`, un admin insère correctement un nouveau membre, un non-admin est rejeté, et aucune récursion (requête `SELECT count(*)` sur `organization_members` : 0,9 ms). **Aucune correction supplémentaire requise** sur `organization_members` — la migration corrective de la fonction suffit à tout réparer.
-
-**Réconciliation réelle du dépôt (12 juillet 2026, poursuite via CLI Supabase)** : `supabase migration list` sur le vrai dépôt (`metalvision`, 54 fichiers de migration) a confirmé que la colonne Remote était vide sur **toute la ligne** — pas seulement autour d'`is_org_admin`. La table de suivi `supabase_migrations.schema_migrations` n'avait jamais été renseignée pour ce projet (cohérent avec des changements historiquement appliqués hors CLI). Réparé via `supabase migration repair --status applied` sur les 54 timestamps (aucune exécution SQL, uniquement la table de suivi) — confirmé synchronisé par un second `migration list`.
-
-**Précision (12 juillet 2026, post-découverte)** : le trou séparé sur `aggregators`/`aggregator_admins` révélé par `supabase db pull` (rejeu complet de l'historique en échec — `relation "public.aggregators" does not exist`) est un résidu d'une **application antérieure** développée sur ce même projet Supabase avant le pivot vers MetalTrace/CCF. Cohérent avec `DT-04` déjà consigné au §5 (domaine Agrégateurs, hors périmètre MVP CCF). Ce n'est pas un bug introduit par Rocket ni par S06 — traité comme dette technique pré-existante, pas comme priorité immédiate. Décision : ne pas tenter de réconcilier l'historique complet des 54 migrations pour l'instant ; capturer `is_org_admin` directement via un nouveau fichier de migration ciblé plutôt que via `db pull` (qui nécessite un rejeu complet et valide de tout l'historique, actuellement impossible à cause de ce trou antérieur).
-
-**Déploiement final (12 juillet 2026)** : `20260712053146_fix_is_org_admin_missing.sql` (recréation idempotente de la fonction, marquée `applied` via `migration repair` puisque déjà présente sur le remote) puis `20260712054247_ccf_012_mandates_s06.sql` (migration S06 complète, version corrigée post-revue) tous deux committés sur `main` (dépôt `metalvision`) et appliqués avec succès via `supabase db push` sur le projet METALVISION. Aucune erreur — uniquement des `NOTICE ... does not exist, skipping` attendus (premiers `DROP ... IF EXISTS` sur des objets encore inexistants). **S06 est en production.** Reste à faire : exécuter le protocole de test complet (`Protocole-Test-S06-Mandats.md`) directement sur METALVISION pour validation fonctionnelle end-to-end.
-
-**PR parallèle fermé sans fusion (12 juillet 2026)** : la branche `rocket-update` (fichier `supabase/migrations/20260712020000_s06_mandates_complete.sql`) contenait la toute première version du script S06, générée par Rocket avant la revue — les 4 bugs `INC-S06-01` à `04` y étaient tous encore présents (policies utilisant `user_org_ids()` au lieu d'`is_org_admin()`, policy d'émission `draft → pending_acceptance` toujours absente). Vérifié directement via `git show origin/rocket-update:...` avant toute décision. PR fermé sans fusion pour éviter d'écraser la version corrigée déjà déployée sur `main`. **Branche supprimée le 12 juillet 2026** (voir §9quinquies) après confirmation qu'elle était entièrement contenue dans l'historique de `main` (`git merge-base --is-ancestor origin/rocket-update origin/main` → vrai, 0 commit d'avance).
-
----
-
-## 9quater. Test S06 en production (base de données seulement) — 12 juillet 2026
-
-Premier test réel contre METALVISION (pas un environnement de simulation), exécuté via le SQL Editor Supabase avec de vraies organisations existantes (Acier Laurentien Inc., RecyclMétal Estrie). Couvre uniquement la partie base de données du protocole de test (§1-3 de `Protocole-Test-S06-Mandats.md`) — **l'écran `/mandats` n'existe pas encore**, donc les tests RLS multi-comptes et le parcours navigateur (§4-5) restent à faire une fois l'écran construit par Rocket. Le SQL Editor s'exécute en rôle `postgres` (superutilisateur), qui contourne RLS par nature — ces résultats valident la structure, les triggers et les transitions d'état, pas encore les policies RLS elles-mêmes avec de vrais comptes.
-
-**Résultat : tout conforme, aucun bug trouvé.**
-
-| Vérification | Résultat |
-|---|---|
-| Structure `mandates` (colonnes, types) | Conforme — `mandate_scope` bien en ENUM (`USER-DEFINED`) |
-| Contrainte `status` (5 valeurs fermées) | Conforme |
-| Contrainte auto-mandat interdit | Présente et fonctionnelle — **nom réel `mandates_different_orgs`**, différent du nom documenté (`mandates_issuer_receiver_distinct`) dans les instructions initiales à Rocket. Écart cosmétique sans impact fonctionnel, à corriger dans la documentation. |
-| Catalogue `mandate_actions` | Exactement les 10 actions canoniques du cahier §4.2 |
-| Trigger RT-07 | Présent (`validate_mandate_permissions_trigger`) et fonctionnel — action inconnue rejetée, action valide acceptée |
-| Trigger MVP-RA-029 (`mandates_enforce_active_freeze`) | Présent et fonctionnel — modification de `mandate_scope` sur mandat `active` rejetée avec le message attendu |
-| Transition `draft → pending_acceptance → active` | Réussie en base (non testée via RLS/policy à ce stade) |
-| `is_mandate_effective()` (MVP-DA-017) | Retourne `true` pour un mandat actif sans `end_date`, conforme |
-
-**Nettoyage effectué** : mandat de test supprimé après validation, aucune donnée résiduelle en production.
-
-**Aucune action corrective requise.** Prochaine étape : compléter les tests RLS multi-comptes et le parcours navigateur une fois l'écran `/mandats` livré par Rocket — voir §9quinquies.
-
----
-
-## 9quinquies. Revue de code S06 (Mandats) — écran frontend, 12 juillet 2026
-
-Suite à §9quater, Rocket a construit l'écran `/mandats` (`src/app/mandats/page.tsx`, ~1000 lignes) — création de mandat, envoi, acceptation (branches autonome/projet selon MVP-DA-019), refus, révocation, filtres et panneau de détail. Revue de code complète effectuée avant de considérer l'écran validé, avec un focus particulier sur la duplication d'écritures `business_events` entre RPC (insertion server-side) et frontend (insertion manuelle) — patron de bug déjà rencontré ailleurs dans le projet et désormais consigné dans une checklist dédiée (voir plus bas).
-
-**Résultat : 1 bug réel trouvé et corrigé.**
-
-| Code | Constat | Cause racine | Correction |
-|---|---|---|---|
-| INC-S06-06 | `handleAcceptStandalone` (acceptation d'un mandat autonome) insérait manuellement un événement `business_events` (`mandate_accepted`) après l'appel à la RPC `accept_mandate()` — qui insère déjà cet événement elle-même côté serveur (voir `20260712075446_accept_mandate_rpc.sql`, ligne 35). Doublon confirmé en base à chaque acceptation. | Insertion manuelle laissée dans le frontend après l'introduction de la RPC `accept_mandate()` (créée pour séparer les branches MVP-DA-019) — la RPC a absorbé une responsabilité que le frontend assumait auparavant seul, sans que l'appel manuel correspondant soit retiré. | Insertion manuelle supprimée dans `handleAcceptStandalone`, remplacée par un commentaire renvoyant à la RPC comme source unique de vérité pour cet événement. Commit `957c1d7` sur `main`. |
-
-**Vérifié sans bug** : `handleDecline`/`decline_project_invitation` — aucune insertion manuelle côté client, la RPC gère seule l'insertion server-side (`mandate_revoked`, `reason: declined_by_receiver`). Balayage complet du fichier confirmé : 3 insertions `business_events` au total (`handleSend`, `handleAcceptStandalone`, `handleRevoke`), 2 appels RPC (`accept_mandate`, `decline_project_invitation`) — seul le croisement RPC × insertion manuelle sur `accept_mandate` était fautif ; `handleSend`/`handleRevoke` ne passent par aucune RPC (simple `UPDATE` direct sur `mandates`), donc leur insertion manuelle est légitime. Confirmé également que le trigger `audit_mandates` (créé à CCF-008) écrit exclusivement dans `audit_logs`, jamais dans `business_events` — aucun risque de collision entre les deux journaux, cohérent avec la séparation documentée à CCF-008 (« un fait ne doit jamais figurer dans les deux journaux »).
-
-**Point de conception à clarifier avec Rocket (pas un bug)** : le bouton « Refuser » appelle systématiquement `decline_project_invitation`, y compris pour un mandat autonome — alors que l'acceptation respecte la séparation stricte `accept_mandate`/`accept_project_invitation` de MVP-DA-019 (voir note ajoutée à MVP-DA-019, §1). Fonctionne correctement car la RPC ne dépend pas du `project_id`, mais le nommage est trompeur et casse la symétrie du modèle. À renommer ou à scinder en `decline_mandate`/`decline_project_invitation` par cohérence, dans une prochaine itération.
-
-**Suites données à cette session :**
-- Correctif `INC-S06-06` commité et poussé sur `main` (`957c1d7`).
-- Branche distante `rocket-update` (PR fermé sans fusion, voir §9bis) supprimée — confirmée comme entièrement contenue dans l'historique de `main` (`git merge-base --is-ancestor`), donc aucune perte de contenu.
-- Checklist de revue systématique créée (`ROCKET_REVIEW_CHECKLIST.md`, commit `1f0b8a7`), consolidant les patrons récurrents des incidents `INC-S06-01` à `06` (RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git) — à appliquer à chaque futur livrable de Rocket, avant fusion sur `main`.
-
-**État de S06 après cette session : complet.** Backend déployé et testé sur METALVISION (§9quater), frontend construit par Rocket et revu (cette section) — écran `/mandats` validé, un seul correctif nécessaire. Prêt à passer à l'écran suivant de la roadmap 30-60-90.
-
----
-
-## 10. Suite de validation automatisée
+## 9. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
 
@@ -312,10 +189,8 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ---
 
-## 11. Prochaines étapes recommandées
+## 10. Prochaines étapes recommandées
 
-1. Écrans S07–S10 selon le mapping 30-60-90 du backlog technique (S01-S06 complets : Organisations, Capacités, Opportunités, Mandats).
+1. Écrans S01–S10 selon le mapping 30-60-90 du backlog technique.
 2. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
 3. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
-4. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
-5. Clarifier avec Rocket le point de nommage `decline_project_invitation` (utilisée pour les deux branches MVP-DA-019, voir §9quinquies) — renommer ou scinder en `decline_mandate`/`decline_project_invitation`.
