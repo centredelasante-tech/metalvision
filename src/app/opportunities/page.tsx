@@ -90,11 +90,12 @@ function OppCapStatusBadge({ status }: { status: OppCapStatus }) {
 
 interface CreateModalProps {
   coordOrgs: Organization[];
+  actorId: string;
   onClose: () => void;
   onCreated: (id: string) => void;
 }
 
-function CreateOpportunityModal({ coordOrgs, onClose, onCreated }: CreateModalProps) {
+function CreateOpportunityModal({ coordOrgs, actorId, onClose, onCreated }: CreateModalProps) {
   const [form, setForm] = useState({
     coordinator_org_id: coordOrgs[0]?.id ?? '',
     title: '',
@@ -117,15 +118,6 @@ function CreateOpportunityModal({ coordOrgs, onClose, onCreated }: CreateModalPr
     setError('');
     const supabase = createClient();
 
-    // Resolve actor_id from profiles
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setError('Non authentifié.'); setSaving(false); return; }
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single();
-
     const { data: opp, error: insertError } = await supabase
       .from('opportunities')
       .insert({
@@ -143,12 +135,13 @@ function CreateOpportunityModal({ coordOrgs, onClose, onCreated }: CreateModalPr
     if (insertError) { setError(insertError.message); setSaving(false); return; }
 
     // Emit business event opportunity_created
-    if (opp && profile) {
+    // actor_id = auth.uid() = profiles.id directly (no user_id column on profiles)
+    if (opp) {
       await supabase.from('business_events').insert({
         event_type: 'opportunity_created',
         object_type: 'opportunity',
         object_id: opp.id,
-        actor_id: profile.id,
+        actor_id: actorId,
         organization_id: form.coordinator_org_id,
         payload: { title: form.title.trim(), status: 'draft' },
       });
@@ -272,12 +265,12 @@ function CreateOpportunityModal({ coordOrgs, onClose, onCreated }: CreateModalPr
 
 interface QualifyModalProps {
   opportunity: Opportunity;
-  profileId: string;
+  actorId: string;
   onClose: () => void;
   onQualified: () => void;
 }
 
-function QualifyModal({ opportunity, profileId, onClose, onQualified }: QualifyModalProps) {
+function QualifyModal({ opportunity, actorId, onClose, onQualified }: QualifyModalProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -294,11 +287,12 @@ function QualifyModal({ opportunity, profileId, onClose, onQualified }: QualifyM
     if (updateError) { setError(updateError.message); setSaving(false); return; }
 
     // Emit business event opportunity_qualified
+    // actor_id = auth.uid() = profiles.id directly (no user_id column on profiles)
     await supabase.from('business_events').insert({
       event_type: 'opportunity_qualified',
       object_type: 'opportunity',
       object_id: opportunity.id,
-      actor_id: profileId,
+      actor_id: actorId,
       organization_id: opportunity.coordinator_org_id,
       payload: { title: opportunity.title, previous_status: 'draft', new_status: 'qualified' },
     });
@@ -363,7 +357,7 @@ interface DetailPanelProps {
   opportunity: Opportunity;
   coordOrgName: string;
   isCoordinator: boolean;
-  profileId: string;
+  actorId: string;
   onQualified: () => void;
   onClose: () => void;
 }
@@ -372,7 +366,7 @@ function OpportunityDetailPanel({
   opportunity,
   coordOrgName,
   isCoordinator,
-  profileId,
+  actorId,
   onQualified,
   onClose,
 }: DetailPanelProps) {
@@ -525,7 +519,7 @@ function OpportunityDetailPanel({
       {showQualifyModal && (
         <QualifyModal
           opportunity={opportunity}
-          profileId={profileId}
+          actorId={actorId}
           onClose={() => setShowQualifyModal(false)}
           onQualified={() => { onQualified(); loadCapabilities(); }}
         />
@@ -540,7 +534,8 @@ export default function OpportunitiesPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [coordOrgs, setCoordOrgs] = useState<Organization[]>([]);
   const [orgMap, setOrgMap] = useState<Record<string, string>>({});
-  const [profileId, setProfileId] = useState<string>('');
+  // actorId = auth.uid() = profiles.id directly (profiles has no user_id column)
+  const [actorId, setActorId] = useState<string>('');
   const [coordOrgIds, setCoordOrgIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -556,15 +551,11 @@ export default function OpportunitiesPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError('Non authentifié.'); setLoading(false); return; }
 
-    // Get profile
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single();
-    if (profile) setProfileId(profile.id);
+    // profiles.id = auth.uid() directly — no user_id column on profiles
+    setActorId(user.id);
 
     // Get org memberships (admin/owner can coordinate)
+    // organization_members.user_id references profiles.id = auth.uid()
     const { data: memberships } = await supabase
       .from('organization_members')
       .select('organization_id, org_role, status')
@@ -735,7 +726,7 @@ export default function OpportunitiesPage() {
               opportunity={selectedOpp}
               coordOrgName={orgMap[selectedOpp.coordinator_org_id] ?? '—'}
               isCoordinator={isCoordinator(selectedOpp)}
-              profileId={profileId}
+              actorId={actorId}
               onQualified={() => {
                 loadData();
                 setSelectedOpp(prev => prev ? { ...prev, status: 'qualified' } : null);
@@ -750,6 +741,7 @@ export default function OpportunitiesPage() {
       {showCreateModal && (
         <CreateOpportunityModal
           coordOrgs={coordOrgs}
+          actorId={actorId}
           onClose={() => setShowCreateModal(false)}
           onCreated={() => loadData()}
         />
