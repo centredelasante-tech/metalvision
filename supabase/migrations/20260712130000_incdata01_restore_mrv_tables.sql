@@ -109,22 +109,19 @@ CREATE TABLE IF NOT EXISTS public.raw_measurements (
         CHECK (status IN ('submitted', 'processed', 'invoiced')),
     notes TEXT,
     weight_kg NUMERIC,
-    container_id UUID REFERENCES public.containers(id) ON DELETE SET NULL,
+    container_id UUID,
     transport_request_id UUID,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- NOTE : le FK container_id ci-dessus référence public.containers,
--- créée plus bas dans ce même fichier — PostgreSQL résout les FK
--- vers des tables créées plus loin dans la même transaction tant
--- que la table existe au moment du COMMIT implicite de fin de
--- script ; ceci reproduit l'ordre historique où containers existait
--- déjà (créée le 2026-06-30) avant l'ajout de la colonne (2026-07-01).
--- Pour éviter toute ambiguïté, la contrainte FK est ajoutée après
--- coup, une fois containers créée (voir plus bas, section 4bis).
-
-ALTER TABLE public.raw_measurements DROP CONSTRAINT IF EXISTS raw_measurements_container_id_fkey;
+-- NOTE : container_id est déclaré SANS REFERENCES ici volontairement.
+-- public.containers n'existe pas encore à ce stade du script (créée
+-- plus bas, section 4) — un CREATE TABLE avec REFERENCES vers une
+-- table inexistante échoue immédiatement (confirmé par un premier
+-- échec de push : `relation "public.containers" does not exist`).
+-- La contrainte FK réelle est ajoutée en section 4bis, une fois
+-- containers créée.
 
 CREATE INDEX IF NOT EXISTS idx_raw_measurements_client_id ON public.raw_measurements(client_id);
 CREATE INDEX IF NOT EXISTS idx_raw_measurements_metal_type ON public.raw_measurements(metal_type_predicted);
