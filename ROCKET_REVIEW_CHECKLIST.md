@@ -9,7 +9,8 @@
 ## 1. RLS (policies SQL)
 
 - [ ] Chaque transition de statut attendue a une policy `UPDATE` qui la couvre explicitement (`USING`/`WITH CHECK`). Reproduire chaque transition métier une par une — un workflow bloqué dès la première étape est facile à manquer en lecture (`INC-S06-01`).
-- [ ] Toute vérification de rôle utilise les fonctions utilitaires existantes (`is_org_admin()`, etc.) — jamais une re-implémentation locale (`user_org_ids()` seul, sans filtre de rôle) qui laisserait n'importe quel membre agir à la place d'un admin (`INC-S06-03`).
+- [ ] Toute vérification de rôle utilise les fonctions utilitaires existantes (`is_org_admin()`, etc.) — jamais une re-implémentation locale (`user_org_ids()` seul, sans filtre de rôle) qui laisserait n'importe quel membre agir à la place d'un admin (`INC-S06-03`, **réapparu identique dans une nouvelle RPC à `INC-S06-07`** — un patron déjà corrigé une fois n'est pas immunisé contre une réapparition ailleurs dans le même domaine).
+- [ ] Toute nouvelle valeur `event_type` insérée dans `business_events` existe réellement dans l'ENUM `ccf_event_type` (`20260710001000_ccf_001_enums.sql`) — sinon l'`INSERT` échoue à l'exécution, pas à la revue de code (`INC-S06-08`). Grep la définition de l'ENUM avant d'accepter toute nouvelle valeur mentionnée dans un commit.
 - [ ] Vérifier les **combinaisons** de policies `UPDATE` permissives sur une même table : Postgres combine tous les `WITH CHECK` par OR, pas seulement celui dont le `USING` a sélectionné la ligne. Une policy A peut autoriser une modification qu'aucune policy individuelle ne voulait permettre (`INC-S06-04`).
 - [ ] Tester avec un utilisateur `membre` (non-admin), pas seulement avec un compte admin/owner — un accès trop large ne se voit qu'en testant le rôle le plus faible.
 
@@ -37,7 +38,8 @@
 - [ ] Ne jamais fusionner un PR de Rocket directement — toujours revue + fix avant `main`.
 - [ ] Après tout `git pull`/rebase impliquant une branche de Rocket, vérifier qu'aucun contenu déjà retiré n'a été réintroduit silencieusement (`git diff` contre le dernier état connu-bon avant de pousser).
 - [ ] Une fois un PR buggé fermé sans fusion, supprimer la branche distante si son contenu est un ancêtre de `main` (`git merge-base --is-ancestor origin/<branche> origin/main`) — sinon la garder identifiée comme non fusionnée tant qu'elle n'a pas été traitée.
+- [ ] Avant toute revue de contenu, `git diff origin/main origin/<branche>` sur l'**ensemble** des fichiers, pas seulement celui que Rocket dit avoir modifié — une branche peut être techniquement construite sur `main` à jour (`main` ancêtre du commit) tout en réintroduisant des fichiers périmés si l'agent a travaillé depuis une copie locale non synchronisée (`ADR-MVP.md` et l'ancien script S06 buggé réapparus à `INC-S06-07`/`08`).
 
 ---
 
-*Dernière mise à jour : 12 juillet 2026, suite à la revue de l'écran S06 (Mandats).*
+*Dernière mise à jour : 12 juillet 2026, suite au PR refusé `decline_mandate` (`INC-S06-07`, `INC-S06-08`) — voir ADR-MVP.md §9sexies.*

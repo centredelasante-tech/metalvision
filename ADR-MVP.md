@@ -299,6 +299,22 @@ Suite à §9quater, Rocket a construit l'écran `/mandats` (`src/app/mandats/pag
 
 ---
 
+## 9sexies. PR de Rocket refusé — `decline_mandate` — 12 juillet 2026
+
+En réponse au point de nommage soulevé en §9quinquies, Rocket a ouvert une nouvelle branche `rocket-update` (commit `f04e3fd`) proposant `decline_mandate()` (RPC symétrique à `accept_mandate()`) et la mise à jour de `handleDecline` dans `page.tsx` pour router selon `mandateProjectMap`. **PR revu avant fusion, comme prescrit par `ROCKET_REVIEW_CHECKLIST.md` — rien fusionné.**
+
+| Code | Constat | Détail |
+|---|---|---|
+| INC-S06-07 | `decline_mandate()` vérifiait `v_mandate.receiver_org_id NOT IN (SELECT user_org_ids())` au lieu d'`is_org_admin()` — régression exacte du patron `INC-S06-03` (n'importe quel membre actif, pas seulement un admin, aurait pu refuser un mandat). | Repéré par lecture directe du commit sur `origin/rocket-update` (`git show`), pas seulement du snippet fourni par Rocket. |
+| INC-S06-08 | `decline_mandate()` insérait `event_type: 'mandate_declined'` — valeur absente de l'ENUM `ccf_event_type` (`20260710001000_ccf_001_enums.sql` ne définit que `mandate_issued`/`mandate_accepted`/`mandate_revoked`). Le premier appel aurait levé `invalid input value for enum ccf_event_type`. | Confirmé par grep direct sur la définition de l'ENUM avant tout jugement. |
+| — | La branche réintroduisait aussi `supabase/migrations/20260712020000_s06_mandates_complete.sql` (le tout premier script buggé de Rocket, `INC-S06-01` à `04`, déjà écarté au §9bis/§9ter) et faisait régresser `ADR-MVP.md` de 135 lignes vers une version antérieure à cette session. | Diagnostic : `git diff origin/main origin/rocket-update` — la branche a été construite depuis une copie locale périmée du dépôt (page.tsx et ADR-MVP.md d'avant les corrections de cette session), pas depuis `main` à jour, malgré que `main` soit techniquement un ancêtre du commit. |
+
+**Décision : rien pris de cette branche.** Seule la logique de routage (`getAcceptType`/`mandateProjectMap` pour choisir la RPC) était correcte dans l'intention — réécrite indépendamment plutôt que copiée, avec `is_org_admin()`, `event_type = 'mandate_revoked'`, et un garde-fou supplémentaire (rejet si le mandat est lié à un `project_participants`, symétrique à `accept_mandate()`) qui manquait même dans la version de Rocket. Migration `20260712080000_decline_mandate_rpc.sql` créée et poussée directement sur `main`. `handleDecline` dans `page.tsx` mis à jour pour router via `getAcceptType(mandate.id)`.
+
+**Leçon retenue, à ajouter à `ROCKET_REVIEW_CHECKLIST.md`** : un agent qui « corrige » un point signalé peut réintroduire un bug déjà résolu ailleurs dans le même fichier ou le même domaine (ici : le contrôle admin, déjà cassé une fois à `INC-S06-03`) — ne jamais faire confiance à un correctif isolé sans revérifier les patrons déjà documentés dans ce registre pour la même table/fonction. Vérifier aussi systématiquement que la branche a été construite depuis `main` à jour (`git diff origin/main origin/<branche>` sur l'ensemble des fichiers, pas seulement celui censé être modifié) avant toute revue de contenu.
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -318,4 +334,5 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 2. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
 3. Projet de durcissement séparé pour la dette technique du §5 (DT-01 à DT-07), hors périmètre du MVP CCF.
 4. Appliquer systématiquement `ROCKET_REVIEW_CHECKLIST.md` (introduite en §9quinquies) à chaque nouveau livrable de Rocket avant fusion — RLS, triggers de gel, doublons `business_events`, symétrie des RPC, idempotence des migrations, process git.
-5. Clarifier avec Rocket le point de nommage `decline_project_invitation` (utilisée pour les deux branches MVP-DA-019, voir §9quinquies) — renommer ou scinder en `decline_mandate`/`decline_project_invitation`.
+5. ~~Clarifier avec Rocket le point de nommage `decline_project_invitation`~~ — **résolu** : `decline_mandate()` créée et déployée directement (voir §9sexies), symétrie accept/decline désormais complète.
+6. Informer Rocket des `INC-S06-07`/`08` (voir §9sexies) avant sa prochaine tentative sur ce point — éviter une nouvelle branche construite sur une copie périmée du dépôt.

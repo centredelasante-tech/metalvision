@@ -329,10 +329,17 @@ export default function MandatsPage() {
     }
   };
 
+  // MVP-DA-019: Decline — mirrors the accept branching (getAcceptType) so the
+  // symmetry noted at INC-S06-06 review holds: project-linked mandates go
+  // through decline_project_invitation, standalone mandates through the
+  // dedicated decline_mandate RPC (supabase/migrations/20260712080000_decline_mandate_rpc.sql).
   const handleDecline = async (mandate: Mandate) => {
     setActionLoading(mandate.id);
     try {
-      const { error: err } = await supabase.rpc('decline_project_invitation', {
+      const declineType = getAcceptType(mandate.id);
+      const rpcName = declineType === 'project' ? 'decline_project_invitation' : 'decline_mandate';
+
+      const { error: err } = await supabase.rpc(rpcName, {
         p_mandate_id: mandate.id,
       });
       if (err) throw err;
