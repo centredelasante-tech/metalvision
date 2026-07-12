@@ -3,7 +3,7 @@
 
 **Portée :** Centre de Consolidation Ferroviaire (CCF) — domaine collaboratif MetalTrace, coexistant sur la même base Supabase que les domaines préexistants MRV/ISO 14064 et Regroupements/Agrégateurs.
 
-**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — et §9duodecies pour la revue backend de S05 (Projet CCF), **1 bug corrigé (`INC-S05-01`), prêt pour le frontend**.
+**Statut de la base au moment de la rédaction :** staging validé — 63/63 assertions automatisées passées (voir §10). Mise à jour du 12 juillet 2026 : voir §7 pour l'incident de test end-to-end S02, §8 pour l'incident de test end-to-end S03, §9 pour le test end-to-end S04 (aucun bug trouvé), §9bis à §9sexies pour l'écran S06 (Mandats) — backend et frontend, **complet et validé** — §9septies/§9octies pour S07 (Documents), **complet, corrigé et validé de bout en bout en production** — §9novies/§9decies pour S08 (Événements), **frontend accepté partiellement, 4ᵉ occurrence du patron `INC-S07-04`** — §9undecies pour la fermeture des trous de test S06/S08 — §9duodecies pour la revue backend de S05 (Projet CCF), 1 bug corrigé (`INC-S05-01`) — et §9terdecies pour la revue frontend de S05, **complet, corrigé (`INC-S05-02`) et intégré, 5ᵉ occurrence du patron de régression récurrent, reste le test live à faire**.
 
 **Comment lire ce document :** chaque décision porte un code stable (`MVP-DA-xxx` pour une décision d'architecture, `MVP-RA-xxx` pour une règle d'affaires). Ces codes sont cités dans les migrations SQL et dans le cahier fonctionnel v1.2 — ne jamais les réutiliser pour une décision différente. Les sections normatives (cahier, backlog, migrations) restent la source de vérité du contenu ; ce registre sert d'index et de justification, pas de duplication.
 
@@ -474,6 +474,42 @@ Même discipline que S06/S07/S08 : revue de `ccf_005` (`ccf_projects`, `project_
 
 ---
 
+## 9terdecies. Revue PR Rocket S05 (`/projets`, `/projets/:id`) — 12 juillet 2026
+
+PR reçue mais **non fusionnée** (branche `rocket-update` récupérée via `git fetch origin rocket-update` / `FETCH_HEAD`, jamais mergée directement — conformément à la règle établie depuis S06). Revue complète du diff (`git diff origin/main FETCH_HEAD --stat`), fichier par fichier, avant toute décision de fusion.
+
+**Résultat : 5ᵉ occurrence confirmée du patron de régression récurrent (branche locale non resynchronisée) + 1 bug réel nouveau dans le code neuf (`INC-S05-02`). Les 3 fichiers neufs/légitimes ont été retenus et corrigés/cherry-pickés ; la branche n'a pas été fusionnée.**
+
+### Régression récurrente — 5ᵉ occurrence
+
+Comme pour `INC-S06-07/08`, `INC-S07-04` et `INC-S08-01`, le diff contient, en plus du travail demandé, la réintroduction du même contenu périmé déjà signalé quatre fois :
+- `ADR-MVP.md` : 320 lignes de retrait, section historique écrasée par une version antérieure.
+- `supabase/migrations/20260710006200_ccf_006c_documents_project_visibility_check.sql` : revert identique (5ᵉ fois) du commentaire `MVP-RA-028` → `MVP-RA-026`.
+- `src/app/mandats/page.tsx` : réintroduction de l'insertion manuelle en double de `business_events` sur `handleAccept` (le doublon originel d'`INC-S06-06`, déjà retiré), et retour de `handleDecline` à son ancienne forme non symétrique (avant la correction `getAcceptType`/`mandateProjectMap`).
+- Deux migrations fantômes réapparues telles quelles : `20260712020000_s06_mandates_complete.sql` et `20260712030000_s06_decline_mandate_rpc.sql` — copies des anciens fichiers déjà remplacés par `ccf_012_mandates_s06.sql`, `accept_mandate_rpc.sql` et `decline_mandate_rpc.sql` sur `main`.
+
+Aucun de ces fichiers n'a été retenu. Le brief envoyé à Rocket pour cet écran incluait déjà, en tête, une consigne explicite de `git pull`/`git reset --hard origin/main` avant de démarrer — sans effet. Ce process reste donc non résolu côté Rocket.
+
+### `INC-S05-02` — nouveau bug (pas une régression) : `object_id` erroné sur `value_report_generated`
+
+Dans `src/app/projets/[id]/page.tsx`, `handleVRSave()` insérait manuellement l'événement `business_events` `value_report_generated` avec `object_type: 'value_report'` mais `object_id: project.id` — au lieu de l'identifiant de la ligne `value_reports` elle-même. Incohérent avec la convention établie en S07 (`ccf_006e` : `object_id` référence toujours l'objet visé par l'événement, jamais son parent). Conséquence : une requête `business_events` filtrée sur `object_type = 'value_report' AND object_id = <id réel du rapport>` ne retournerait jamais cet événement. Aggravé côté création : l'`INSERT` ne récupérait même pas l'`id` de la ligne nouvellement créée (`.insert(payload)` sans `.select()`), donc la valeur correcte n'était de toute façon pas disponible dans le code d'origine.
+
+**Corrigé avant fusion** (dans le fichier cherry-pické, pas par Rocket) : ajout de `.select('id').single()` sur l'insertion, capture de `valueReportId` (= `editingVR.id` en mise à jour, = l'id retourné par l'insert en création), utilisé comme `object_id` de l'événement.
+
+### Fichiers retenus (revus ligne par ligne contre `Brief-Rocket-S05-Projet.md`)
+
+| Fichier | Verdict |
+|---|---|
+| `src/app/projets/page.tsx` (147 lignes) | Conforme — liste filtrable par phase, requête `ccf_projects` avec jointures `coordinator_org`/`opportunity`, aucun accès direct non filtré par RLS. |
+| `src/app/projets/[id]/page.tsx` (1359 lignes après correction) | Conforme après correction d'`INC-S05-02`. Vérifié explicitement : `project_role` n'est utilisé nulle part pour une décision de permission (seuls `org_role`/`operational_profile` et `is_organization_owner` le sont) ; panneau "Risques" 100 % calculé côté frontend (étapes `blocked`, `target_end_date` dépassée, participants `declined`), aucune nouvelle table ni migration ; `ProjectDocumentUploader` réutilise correctement le pattern S07 avec `object_type`/`object_id` pré-remplis ; `LogisticsStepCard` affiche un message clair (pas une erreur brute) en cas de refus RLS (`code === '42501'`) ; `ObjectTimeline` réutilisé tel quel pour l'onglet Historique (`object_type="project"`) ; flux d'invitation (`accept_project_invitation`/`decline_project_invitation`) réutilisé sans aucune insertion manuelle de `business_events`, conforme à la consigne du brief. |
+| `src/components/Sidebar.tsx` | Conforme — entrée "Projets" ajoutée avant "Documents" dans `clientNav` et `adminNav`, aucune régression, 5ᵉ diff Sidebar consécutif propre. |
+
+**Ces 3 fichiers ont été cherry-pickés directement sur `main`** via `git hash-object`/`git update-index` (jamais de fusion de la branche `rocket-update`). Aucune nouvelle migration requise pour cet écran (toute l'infrastructure backend était déjà déployée en `INC-S05-01`, §9duodecies).
+
+**État de S05 après cette session : backend et frontend tous deux revus, corrigés et intégrés à `main` (non encore poussé sur le dépôt distant). Reste à pousser, fermer la PR sans fusionner, supprimer la branche `rocket-update`, et valider en direct dans le navigateur avant de considérer l'écran terminé — conformément à la discipline établie après la question « est-ce que les tests sont faits ? ».**
+
+---
+
 ## 10. Suite de validation automatisée
 
 Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
@@ -489,7 +525,7 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 
 ## 11. Prochaines étapes recommandées
 
-1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). Écran S05 (`/projets/:id`) — **backend revu et corrigé (§9duodecies)** ; reste à déployer `20260712120000_ccf_005b_project_participants_mandate_consistency.sql` sur METALVISION et à briefer Rocket pour le frontend. Prochains après S05 selon la feuille de route 30-60-90 : S09 (`/cockpit`), dashboard complet (S01), puis S10 (`/admin`) complet.
+1. ~~Écran S07 (`/documents`)~~ — **résolu, terminé** (§9septies, §9octies). ~~Écran S08 (`/evenements`)~~ — **résolu, terminé** (§9novies, §9decies). ~~Écran S05 (`/projets/:id`)~~ — **backend et frontend revus, corrigés et intégrés (§9duodecies, §9terdecies)** ; reste à pousser sur le dépôt distant, fermer/supprimer la PR/branche Rocket, et valider en direct dans le navigateur. Prochains selon la feuille de route 30-60-90 : S09 (`/cockpit`), dashboard complet (S01), puis S10 (`/admin`) complet.
 2. ~~Déployer sur METALVISION les 3 fichiers correctifs S07 et tester `approve_document()`~~ — **résolu** : déployé et validé en production (voir §9septies, addendum validation).
 3. Déployer `20260712110000_ccf_006f_documents_storage_bucket.sql` sur METALVISION (`supabase db push`), puis tester un dépôt de document réel dans l'écran `/documents` (upload, lecture, transition complète du cycle de vie) avant démonstration externe.
 4. Tests end-to-end du parcours CCF complet (organisation → capacité → opportunité → invitation → mandat → projet → documents → logistique → rapport).
