@@ -23,6 +23,7 @@ const clientNav: NavItem[] = [
   { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
   { label: 'Mandats', href: '/mandats', icon: 'DocumentCheckIcon', group: 'réseau' },
+  { label: 'Projets', href: '/projets', icon: 'FolderIcon', group: 'réseau' },
   { label: 'Documents', href: '/documents', icon: 'FolderOpenIcon', group: 'réseau' },
   { label: 'Événements', href: '/evenements', icon: 'BoltIcon', group: 'réseau' },
 ];
@@ -37,6 +38,7 @@ const adminNav: NavItem[] = [
   { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
   { label: 'Mandats', href: '/mandats', icon: 'DocumentCheckIcon', group: 'réseau' },
+  { label: 'Projets', href: '/projets', icon: 'FolderIcon', group: 'réseau' },
   { label: 'Documents', href: '/documents', icon: 'FolderOpenIcon', group: 'réseau' },
   { label: 'Événements', href: '/evenements', icon: 'BoltIcon', group: 'réseau' },
   { label: 'Factures', href: '/', icon: 'DocumentTextIcon', badgeKey: 'factures', group: 'finance' },
