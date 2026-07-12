@@ -316,15 +316,9 @@ export default function MandatsPage() {
       });
       if (err) throw err;
 
-      const { data: { user } } = await supabase.auth.getUser();
-      await supabase.from('business_events').insert({
-        event_type: 'mandate_accepted',
-        object_type: 'mandate',
-        object_id: mandate.id,
-        actor_id: user?.id,
-        organization_id: mandate.receiver_org_id,
-        payload: { mandate_id: mandate.id },
-      });
+      // INC-S06-06 : accept_mandate() insere deja l'evenement business_events
+      // cote serveur (voir supabase/migrations/20260712075446_accept_mandate_rpc.sql,
+      // ligne 35). L'insertion manuelle ici causait un doublon en base -- retiree.
 
       await loadData();
       setSelectedMandate(null);
