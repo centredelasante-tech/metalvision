@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
@@ -351,6 +352,196 @@ function QualifyModal({ opportunity, actorId, onClose, onQualified }: QualifyMod
   );
 }
 
+// ─── Convert to Project Modal (E08-T01) ───────────────────────────────────────
+
+interface ConvertToProjectModalProps {
+  opportunity: Opportunity;
+  actorId: string;
+  onClose: () => void;
+}
+
+function ConvertToProjectModal({ opportunity, actorId, onClose }: ConvertToProjectModalProps) {
+  const router = useRouter();
+  const [form, setForm] = useState({
+    title: opportunity.title,
+    start_date: '',
+    target_end_date: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.title.trim()) { setError('Le titre du projet est obligatoire.'); return; }
+    setSaving(true);
+    setError('');
+    const supabase = createClient();
+
+    // Step 1: INSERT ccf_projects (phase/status default to 'draft' server-side)
+    const { data: project, error: projectErr } = await supabase
+      .from('ccf_projects')
+      .insert({
+        opportunity_id: opportunity.id,
+        title: form.title.trim(),
+        coordinator_org_id: opportunity.coordinator_org_id,
+        start_date: form.start_date || null,
+        target_end_date: form.target_end_date || null,
+      })
+      .select('id')
+      .single();
+
+    if (projectErr) {
+      // Surface readable error — PostgrestError is not an instanceof Error
+      const msg = (projectErr as { message?: string }).message ?? String(projectErr);
+      setError(`Erreur lors de la création du projet : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    const newProjectId = project.id;
+
+    // Step 2: INSERT project_participants for coordinator org (status='active', no mandate needed)
+    const { error: participantErr } = await supabase
+      .from('project_participants')
+      .insert({
+        project_id: newProjectId,
+        organization_id: opportunity.coordinator_org_id,
+        project_role: 'coordonnateur',
+        status: 'active',
+        mandate_id: null,
+      });
+
+    if (participantErr) {
+      const msg = (participantErr as { message?: string }).message ?? String(participantErr);
+      setError(`Projet créé (${newProjectId.slice(0, 8)}…) mais erreur lors de l'ajout du participant coordonnateur : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    // Step 3: UPDATE opportunities SET status='converted'
+    const { error: oppErr } = await supabase
+      .from('opportunities')
+      .update({ status: 'converted', updated_at: new Date().toISOString() })
+      .eq('id', opportunity.id);
+
+    if (oppErr) {
+      const msg = (oppErr as { message?: string }).message ?? String(oppErr);
+      setError(`Projet créé mais erreur lors de la mise à jour de l'opportunité : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    // Step 4: INSERT business_events — project_created
+    await supabase.from('business_events').insert({
+      event_type: 'project_created',
+      object_type: 'project',
+      object_id: newProjectId,
+      actor_id: actorId,
+      organization_id: opportunity.coordinator_org_id,
+      payload: { title: form.title.trim(), opportunity_id: opportunity.id },
+    });
+
+    // Step 5: Redirect to /projets/:id
+    router.push(`/projets/${newProjectId}`);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card rounded-xl border border-border shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Convertir en projet</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Crée un projet CCF à partir de cette opportunité qualifiée
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <Icon name="XMarkIcon" size={18} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Info banner */}
+          <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 flex items-start gap-3">
+            <Icon name="InformationCircleIcon" size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-blue-800">Conversion irréversible</p>
+              <p className="text-xs text-blue-700 mt-0.5">
+                L'opportunité passera au statut <strong>Convertie</strong>. Votre organisation sera
+                automatiquement ajoutée comme participant coordonnateur du nouveau projet.
+              </p>
+            </div>
+          </div>
+
+          {/* Title */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Titre du projet <span className="text-red-500">*</span>
+            </label>
+            <input
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.title}
+              onChange={e => setForm(p => ({ ...p, title: e.target.value }))}
+              required
+            />
+          </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-1">Date de début</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.start_date}
+                onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-1">Date cible de fin</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.target_end_date}
+                onChange={e => setForm(p => ({ ...p, target_end_date: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 flex items-start gap-2">
+              <Icon name="ExclamationTriangleIcon" size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Icon name="FolderPlusIcon" size={16} />
+              )}
+              {saving ? 'Conversion en cours…' : 'Convertir en projet'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Opportunity Detail Panel ─────────────────────────────────────────────────
 
 interface DetailPanelProps {
@@ -373,6 +564,7 @@ function OpportunityDetailPanel({
   const [capabilities, setCapabilities] = useState<OppCapability[]>([]);
   const [loadingCaps, setLoadingCaps] = useState(true);
   const [showQualifyModal, setShowQualifyModal] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
 
   const loadCapabilities = useCallback(async () => {
     setLoadingCaps(true);
@@ -393,6 +585,9 @@ function OpportunityDetailPanel({
   }, [opportunity.id]);
 
   useEffect(() => { loadCapabilities(); }, [loadCapabilities]);
+
+  // E08-T01: at least one active capability required before converting
+  const hasActiveCapability = capabilities.some(c => c.status === 'active');
 
   return (
     <div className="flex flex-col h-full">
@@ -460,6 +655,36 @@ function OpportunityDetailPanel({
           </div>
         )}
 
+        {/* E08-T01: Convert to project action — qualified + coordinator admin only */}
+        {isCoordinator && opportunity.status === 'qualified' && !loadingCaps && (
+          <div className="rounded-lg border border-border p-4 space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Convertir en projet</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Crée un projet CCF lié à cette opportunité qualifiée.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowConvertModal(true)}
+                disabled={!hasActiveCapability}
+                className="btn-primary px-3 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Icon name="FolderPlusIcon" size={16} />
+                Convertir en projet
+              </button>
+            </div>
+            {!hasActiveCapability && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 flex items-start gap-2">
+                <Icon name="ExclamationTriangleIcon" size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-700">
+                  Associez au moins une capacité candidate active avant de convertir cette opportunité en projet.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Candidate capabilities */}
         <div>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
@@ -522,6 +747,14 @@ function OpportunityDetailPanel({
           actorId={actorId}
           onClose={() => setShowQualifyModal(false)}
           onQualified={() => { onQualified(); loadCapabilities(); }}
+        />
+      )}
+
+      {showConvertModal && (
+        <ConvertToProjectModal
+          opportunity={opportunity}
+          actorId={actorId}
+          onClose={() => setShowConvertModal(false)}
         />
       )}
     </div>

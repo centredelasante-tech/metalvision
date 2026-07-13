@@ -94,6 +94,11 @@ interface OrgMembership {
   status: string;
 }
 
+interface MandateAction {
+  code: string;
+  label: string;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PHASE_CONFIG: Record<ProjectPhase, { label: string; cls: string; icon: string }> = {
@@ -194,6 +199,324 @@ function LogisticsStatusBadge({ status }: { status: LogisticsStepStatus }) {
       <Icon name={cfg.icon as Parameters<typeof Icon>[0]['name']} size={10} />
       {cfg.label}
     </span>
+  );
+}
+
+// ─── Invite Organization Modal (E08-T02) ──────────────────────────────────────
+
+interface InviteOrganizationModalProps {
+  project: CcfProject;
+  actorId: string;
+  allOrganizations: Organization[];
+  onClose: () => void;
+  onInvited: () => void;
+}
+
+type MandateScope = 'gouvernance' | 'operationnel' | 'financier' | 'technique' | 'verification' | 'ia';
+
+const SCOPE_OPTIONS: MandateScope[] = ['gouvernance', 'operationnel', 'financier', 'technique', 'verification', 'ia'];
+const SCOPE_LABELS: Record<MandateScope, string> = {
+  gouvernance:  'Gouvernance',
+  operationnel: 'Opérationnel',
+  financier:    'Financier',
+  technique:    'Technique',
+  verification: 'Vérification',
+  ia:           'IA',
+};
+
+// accept_project_invitation is always pre-checked and non-removable
+const LOCKED_ACTION = 'accept_project_invitation';
+
+function InviteOrganizationModal({
+  project,
+  actorId,
+  allOrganizations,
+  onClose,
+  onInvited,
+}: InviteOrganizationModalProps) {
+  const supabase = createClient();
+
+  const [mandateActions, setMandateActions] = useState<MandateAction[]>([]);
+  const [form, setForm] = useState({
+    receiver_org_id: '',
+    mandate_scope: 'operationnel' as MandateScope,
+    actions: [LOCKED_ACTION] as string[],
+    start_date: '',
+    end_date: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // Load mandate_actions catalogue on mount
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase
+        .from('mandate_actions')
+        .select('code, label')
+        .order('code');
+      setMandateActions(data ?? []);
+    };
+    load();
+  }, [supabase]);
+
+  // Orgs available to invite: all except the coordinator org
+  const invitableOrgs = allOrganizations.filter(
+    o => o.id !== project.coordinator_org_id
+  );
+
+  const toggleAction = (code: string) => {
+    // accept_project_invitation is locked — cannot be removed
+    if (code === LOCKED_ACTION) return;
+    setForm(prev => ({
+      ...prev,
+      actions: prev.actions.includes(code)
+        ? prev.actions.filter(c => c !== code)
+        : [...prev.actions, code],
+    }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!form.receiver_org_id) { setError('Sélectionnez une organisation à inviter.'); return; }
+    if (form.receiver_org_id === project.coordinator_org_id) {
+      setError('L\'organisation coordinatrice est déjà participante.');
+      return;
+    }
+    if (form.actions.length === 0) {
+      setError('Sélectionnez au moins une action autorisée — le mandat ne peut pas avoir un tableau d\'actions vide.');
+      return;
+    }
+
+    setSaving(true);
+
+    // Step 1: INSERT mandates — status='pending_acceptance' sent explicitly (direct invite, not draft)
+    const { data: mandate, error: mandateErr } = await supabase
+      .from('mandates')
+      .insert({
+        issuer_org_id: project.coordinator_org_id,
+        receiver_org_id: form.receiver_org_id,
+        mandate_scope: form.mandate_scope,
+        permissions: { actions: form.actions },
+        status: 'pending_acceptance',
+        start_date: form.start_date || null,
+        end_date: form.end_date || null,
+      })
+      .select('id')
+      .single();
+
+    if (mandateErr) {
+      const msg = (mandateErr as { message?: string }).message ?? String(mandateErr);
+      // Surface validate_mandate_permissions trigger error clearly
+      if (msg.includes('actions') || msg.includes('permissions') || msg.includes('mandate_actions')) {
+        setError('Actions invalides — utilisez uniquement les actions du catalogue autorisé.');
+      } else {
+        setError(`Erreur lors de la création du mandat : ${msg}`);
+      }
+      setSaving(false);
+      return;
+    }
+
+    const mandateId = mandate.id;
+
+    // Step 2: INSERT project_participants — status='invited', role='contributeur'
+    const { error: participantErr } = await supabase
+      .from('project_participants')
+      .insert({
+        project_id: project.id,
+        organization_id: form.receiver_org_id,
+        project_role: 'contributeur',
+        status: 'invited',
+        mandate_id: mandateId,
+      });
+
+    if (participantErr) {
+      const msg = (participantErr as { message?: string }).message ?? String(participantErr);
+      setError(`Mandat créé (${mandateId.slice(0, 8)}…) mais erreur lors de l'ajout du participant : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    // Step 3: INSERT business_events — mandate_issued (same structure as handleSend in mandats/page.tsx)
+    await supabase.from('business_events').insert({
+      event_type: 'mandate_issued',
+      object_type: 'mandate',
+      object_id: mandateId,
+      actor_id: actorId,
+      organization_id: project.coordinator_org_id,
+      payload: {
+        receiver_org_id: form.receiver_org_id,
+        project_id: project.id,
+        scope: form.mandate_scope,
+      },
+    });
+
+    setSaving(false);
+    onInvited();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card rounded-xl border border-border shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Inviter une organisation</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Un mandat d'invitation sera créé et envoyé directement
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <Icon name="XMarkIcon" size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Organisation to invite */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Organisation à inviter <span className="text-red-500">*</span>
+            </label>
+            {invitableOrgs.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">Aucune autre organisation disponible.</p>
+            ) : (
+              <select
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.receiver_org_id}
+                onChange={e => setForm(p => ({ ...p, receiver_org_id: e.target.value }))}
+                required
+              >
+                <option value="">— Sélectionner une organisation —</option>
+                {invitableOrgs.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Mandate scope */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Portée du mandat <span className="text-red-500">*</span>
+            </label>
+            <select
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.mandate_scope}
+              onChange={e => setForm(p => ({ ...p, mandate_scope: e.target.value as MandateScope }))}
+            >
+              {SCOPE_OPTIONS.map(s => (
+                <option key={s} value={s}>{SCOPE_LABELS[s]}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Actions — ActionPicker with accept_project_invitation locked */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Actions autorisées <span className="text-red-500">*</span>
+            </label>
+            {mandateActions.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                Chargement du catalogue…
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                {mandateActions.map(a => {
+                  const isLocked = a.code === LOCKED_ACTION;
+                  const isSelected = form.actions.includes(a.code);
+                  return (
+                    <label
+                      key={a.code}
+                      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                        isLocked ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                      } ${
+                        isSelected
+                          ? 'border-primary bg-primary/5 text-primary font-medium' :'border-border bg-card text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={isSelected}
+                        onChange={() => toggleAction(a.code)}
+                        disabled={isLocked}
+                      />
+                      <span
+                        className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                          isSelected ? 'bg-primary border-primary' : 'border-border'
+                        }`}
+                      >
+                        {isSelected && (
+                          <Icon name="CheckIcon" size={10} className="text-primary-foreground" />
+                        )}
+                      </span>
+                      <span className="truncate flex-1">{a.label}</span>
+                      {isLocked && (
+                        <span className="text-xs text-muted-foreground ml-auto flex-shrink-0 italic">requis</span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Optional dates */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-1">Date de début</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.start_date}
+                onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-1">Date de fin</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.end_date}
+                onChange={e => setForm(p => ({ ...p, end_date: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 flex items-start gap-2">
+              <Icon name="ExclamationTriangleIcon" size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || invitableOrgs.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              {saving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Icon name="EnvelopeIcon" size={16} />
+              )}
+              {saving ? 'Invitation en cours…' : 'Inviter'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -559,6 +882,7 @@ export default function ProjetDetailPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('participants');
   const [showDocUploader, setShowDocUploader] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
 
   // Phase/status edit
   const [editingPhase, setEditingPhase] = useState(false);
@@ -998,6 +1322,15 @@ export default function ProjetDetailPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">Participants ({participants.length})</h2>
+              {isCoordinatorAdmin && (
+                <button
+                  onClick={() => setShowInviteModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
+                  <Icon name="UserPlusIcon" size={14} />
+                  Inviter une organisation
+                </button>
+              )}
             </div>
             {participants.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
@@ -1324,6 +1657,17 @@ export default function ProjetDetailPage() {
           actorId={actorId}
           onClose={() => setShowDocUploader(false)}
           onUploaded={() => { setShowDocUploader(false); loadData(); }}
+        />
+      )}
+
+      {/* Invite organization modal (E08-T02) */}
+      {showInviteModal && project && (
+        <InviteOrganizationModal
+          project={project}
+          actorId={actorId}
+          allOrganizations={organizations}
+          onClose={() => setShowInviteModal(false)}
+          onInvited={() => { setShowInviteModal(false); loadData(); }}
         />
       )}
     </AppLayout>
