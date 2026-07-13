@@ -101,6 +101,22 @@ Ces éléments appartiennent aux domaines MRV/ISO 14064 et Regroupements/Agréga
 
 **Recommandation :** traiter DT-01 à DT-04 et DT-06 dans un projet de durcissement dédié post-MVP, pas dans le cadre du CCF.
 
+**Mise à jour du 13 juillet 2026 — projet de durcissement démarré, à la demande explicite de l'utilisateur.** Chaque point vérifié en direct contre la production avant d'écrire quoi que ce soit (même discipline qu'`INC-DATA-01`, §9novodecies — l'historique des migrations ne suffit pas) :
+
+| Code | Résultat de la vérification live | Action |
+|---|---|---|
+| DT-01 | **Caduc.** La colonne `member_distribution_overrides.created_by` n'existe plus du tout (disparue lors de la reconstruction du schéma, incident §6) — le constat original ne s'applique plus, rien à corriger. | Aucune |
+| DT-02 | Confirmé réel : `actor_id` (uuid, nullable) sans FK. 2 lignes, 0 orpheline vs `profiles(id)`. | FK ajoutée, `ON DELETE SET NULL` |
+| DT-03 | Confirmé réel : `actor_id` (uuid, nullable) sans FK. 2 lignes, 0 orpheline vs `profiles(id)`. | FK ajoutée, `ON DELETE SET NULL` |
+| DT-04 | Confirmé réel : `user_id` (uuid, **NOT NULL**) sans FK. Table vide (0 ligne). | FK ajoutée, `ON DELETE CASCADE` (`SET NULL` impossible sur une colonne `NOT NULL`) |
+| DT-05 | Confirmé réel, mais **constat à nuancer** : le passage ENUM→`TEXT` est une décision délibérée et documentée (`20260628150000_internal_transport.sql`), pas un oubli — deux vocabulaires de statut coexistent selon le provider (interne : `scheduled/in_transit/arrived/delivered/cancelled` ; externe Groupe Robert, encore présent dans le code derrière `app_settings.external_transport_enabled = false` : `pending/assigned/en_route/picked_up/delivered/cancelled`). Table vide en production. | `CHECK` ajouté sur l'union des deux vocabulaires (+ `pending`, valeur `DEFAULT` de la colonne) — cohérent avec `MVP-DA-015` (TEXT + CHECK, pas d'ENUM partagé), sans fermer la porte à l'un ou l'autre provider |
+| DT-06 | Confirmé réel : les 4 fonctions ont `proconfig = null`. **Piège de signature évité** : `is_aggregator_admin()` prend en fait un paramètre (`p_aggregator_id UUID`), pas zéro argument — `ALTER FUNCTION` aurait échoué avec la mauvaise signature. | `SET search_path = public` sur les 4 fonctions |
+| DT-07 | Confirmé déjà résolu : la version en base est bien la version sécurisée (`app_metadata`, pas `raw_user_meta_data`). | Reçoit le même correctif `search_path` que DT-06 (listée dans les deux points) |
+
+**Migration** : `20260713010000_dt_hardening_02_03_04_05_06.sql`. Additive uniquement — aucune donnée supprimée, aucune policy RLS existante modifiée.
+
+**État après cette session : DT-01 (caduc, sans action), DT-02, DT-03, DT-04, DT-05, DT-06 et DT-07 tous traités ou confirmés déjà résolus. Projet de durcissement post-MVP clos.**
+
 ---
 
 ## 6. Incident notable — réinitialisation complète du schéma de staging
