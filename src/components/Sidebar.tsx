@@ -48,6 +48,7 @@ const adminNav: NavItem[] = [
   { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
   { label: 'Facteurs GES', href: '/admin-emission-factors', icon: 'BeakerIcon', group: 'mrv' },
   { label: 'Vérifications', href: '/admin-verification-sessions', icon: 'CheckBadgeIcon', group: 'mrv' },
+  { label: 'Administration', href: '/admin', icon: 'ShieldCheckIcon', group: 'plateforme' },
 ];
 
 const verifierNav: NavItem[] = [
@@ -60,8 +61,8 @@ interface SidebarProps {
 }
 
 const ROLE_LABELS: Record<string, string> = {
-  admin: 'Administrateur',
-  membre: 'Membre',
+  owner: 'Propriétaire',
+  terrain: 'Employé terrain',
 };
 
 export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
@@ -79,15 +80,15 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
       supabase
-        .from('organization_members')
-        .select('org_role, organizations(name)')
+        .from('company_members')
+        .select('role, companies(name)')
         .eq('user_id', user.id)
         .limit(1)
         .single()
         .then(({ data }) => {
           if (!data) return;
-          setMemberRole((data.org_role as string) ?? null);
-          const name = (data.organizations as { name: string } | null)?.name ?? null;
+          setMemberRole((data.role as string) ?? null);
+          const name = (data.companies as { name: string } | null)?.name ?? null;
           setCompanyName(name);
         });
     });
