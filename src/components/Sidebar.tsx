@@ -48,6 +48,7 @@ const adminNav: NavItem[] = [
   { label: 'Projets Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon', group: 'mrv' },
   { label: 'Facteurs GES', href: '/admin-emission-factors', icon: 'BeakerIcon', group: 'mrv' },
   { label: 'Vérifications', href: '/admin-verification-sessions', icon: 'CheckBadgeIcon', group: 'mrv' },
+  { label: 'Administration', href: '/admin', icon: 'ShieldCheckIcon', group: 'plateforme' },
 ];
 
 const verifierNav: NavItem[] = [
