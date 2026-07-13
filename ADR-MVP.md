@@ -115,7 +115,7 @@ Ces éléments appartiennent aux domaines MRV/ISO 14064 et Regroupements/Agréga
 
 **Migration** : `20260713010000_dt_hardening_02_03_04_05_06.sql`. Additive uniquement — aucune donnée supprimée, aucune policy RLS existante modifiée.
 
-**État après cette session : DT-01 (caduc, sans action), DT-02, DT-03, DT-04, DT-05, DT-06 et DT-07 tous traités ou confirmés déjà résolus. Projet de durcissement post-MVP clos.**
+**État après cette session : DT-01 (caduc, sans action), DT-02, DT-03, DT-04, DT-05, DT-06 et DT-07 tous traités ou confirmés déjà résolus. Migration `20260713010000_dt_hardening_02_03_04_05_06.sql` appliquée en production, vérifiée (4 contraintes + 4 fonctions avec `search_path=public` confirmées par requête directe). Projet de durcissement post-MVP clos.**
 
 ---
 
@@ -846,4 +846,4 @@ Limite connue du script : la Partie B valide la logique métier encodée dans le
 13. ~~Prochain écran selon la feuille de route 30-60-90 : S10 (`/admin`) complet.~~ — **résolu, terminé** : backend revu et corrigé (§9unvicies), PR Rocket revue et corrigée (§9duovicies), poussé en production, testé en direct sur les 4 onglets (§9quatervicies). Écran S10 entièrement terminé.
 14. ~~Après clôture de S10 : trancher la dette technique signalée en §9vicies/§11-12 (`AuthContext.tsx`/`useAuth()` — monter `AuthProvider` correctement ou retirer le code mort)~~ — **résolu** : `AuthContext.tsx` supprimé, 3 fichiers corrigés dont `INC-QR-01` (bug réel de traçabilité découvert au passage, voir §9tervicies), poussé en production.
 15. Fermer/supprimer la branche `rocket-update` sur GitHub sans fusion (contient les 7 fichiers périmés rejetés en §9duovicies).
-16. Selon la feuille de route 30-60-90 : les 10 écrans (S01, S05-S10) et le tableau de bord sont désormais tous complets, corrigés et validés en production. Reste, avant démonstration externe : item 3 (bucket Storage documents à tester en réel), item 4 (test end-to-end du parcours CCF complet), item 5 (dette technique DT-01 à DT-07, hors périmètre MVP).
+16. Selon la feuille de route 30-60-90 : les 10 écrans (S01, S05-S10) et le tableau de bord sont désormais tous complets, corrigés et validés en production. ~~Reste, avant démonstration externe : item 3 (bucket Storage documents à tester en réel)~~ — résolu. ~~item 5 (dette technique DT-01 à DT-07)~~ — résolu (§5, mise à jour du 13 juillet). Reste : item 4 (test end-to-end du parcours CCF complet).
