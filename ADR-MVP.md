@@ -1038,7 +1038,9 @@ Aucune migration, aucun changement de comportement RLS — correctif frontend pu
 
 **Décision, en attente de l'utilisateur :** ne rien modifier dans l'immédiat — implémenter une vérification RLS pour 8 actions supplémentaires est un changement structurant, pas un correctif ponctuel, et le faire juste avant une démo comporte un risque de casser un parcours déjà validé. Consigné ici comme constat d'architecture à trancher délibérément : soit accepter que le catalogue reste déclaratif/documentaire pour le MVP (mettre à jour la documentation utilisateur en conséquence), soit planifier l'implémentation RLS complète comme un chantier distinct, hors période de démo.
 
-**État après cette session : constat documenté, aucune modification de policy. En attente de décision sur la suite.**
+**Décision de l'utilisateur : laisser tel quel pour l'instant.** Aucune modification de policy avant la démo — le catalogue reste déclaratif/documentaire pour le MVP. Consigné comme dette technique documentée, à planifier comme chantier séparé après la démo si souhaité, pas comme urgence.
+
+**État après cette session : constat documenté, décision prise, aucune modification de policy.**
 
 ---
 
