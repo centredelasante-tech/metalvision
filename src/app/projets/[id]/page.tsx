@@ -885,6 +885,162 @@ function LogisticsStepCard({ step, canEdit, actorId, coordinatorOrgId, onUpdated
   );
 }
 
+// ─── Add Logistics Step Modal ─────────────────────────────────────────────────
+
+interface AddLogisticsStepModalProps {
+  project: CcfProject;
+  participants: ProjectParticipant[];
+  onClose: () => void;
+  onCreated: () => void;
+}
+
+function AddLogisticsStepModal({ project, participants, onClose, onCreated }: AddLogisticsStepModalProps) {
+  const supabase = createClient();
+
+  // Active participant organizations (including coordinator who is always active)
+  const activeParticipantOrgs: Organization[] = participants
+    .filter(p => p.status === 'active')
+    .map(p => ({ id: p.organization_id, name: p.organization?.name ?? p.organization_id.slice(0, 8) }));
+
+  const [form, setForm] = useState({
+    step_type: '' as LogisticsStepType | '',
+    responsible_org_id: '',
+    planned_date: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!form.step_type) { setError('Sélectionnez un type d\'étape.'); return; }
+    if (!form.responsible_org_id) { setError('Sélectionnez une organisation responsable.'); return; }
+
+    setSaving(true);
+
+    const { error: insertErr } = await supabase
+      .from('logistics_steps')
+      .insert({
+        project_id: project.id,
+        step_type: form.step_type,
+        responsible_org_id: form.responsible_org_id,
+        planned_date: form.planned_date || null,
+        status: 'planned',
+      });
+
+    if (insertErr) {
+      const msg = (insertErr as { message?: string }).message ?? String(insertErr);
+      setError(`Erreur lors de la création : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    setSaving(false);
+    onCreated();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card rounded-xl border border-border shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Ajouter une étape logistique</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Statut initial : Planifié</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <Icon name="XMarkIcon" size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Step type */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Type d&apos;étape <span className="text-red-500">*</span>
+            </label>
+            <select
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.step_type}
+              onChange={e => setForm(p => ({ ...p, step_type: e.target.value as LogisticsStepType }))}
+              required
+            >
+              <option value="">— Sélectionner un type —</option>
+              {(Object.entries(LOGISTICS_STEP_TYPE_LABELS) as [LogisticsStepType, string][]).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Responsible org — active participants only */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Organisation responsable <span className="text-red-500">*</span>
+            </label>
+            {activeParticipantOrgs.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">Aucun participant actif disponible.</p>
+            ) : (
+              <select
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.responsible_org_id}
+                onChange={e => setForm(p => ({ ...p, responsible_org_id: e.target.value }))}
+                required
+              >
+                <option value="">— Sélectionner une organisation —</option>
+                {activeParticipantOrgs.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Planned date (optional) */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">Date planifiée</label>
+            <input
+              type="date"
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.planned_date}
+              onChange={e => setForm(p => ({ ...p, planned_date: e.target.value }))}
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 flex items-start gap-2">
+              <Icon name="ExclamationTriangleIcon" size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || activeParticipantOrgs.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              {saving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Icon name="PlusIcon" size={16} />
+              )}
+              {saving ? 'Création en cours…' : 'Ajouter'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 type ActiveTab = 'participants' | 'logistics' | 'documents' | 'risks' | 'value_report' | 'history';
@@ -915,6 +1071,7 @@ export default function ProjetDetailPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('participants');
   const [showDocUploader, setShowDocUploader] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showAddStepModal, setShowAddStepModal] = useState(false);
 
   // Phase/status edit
   const [editingPhase, setEditingPhase] = useState(false);
@@ -1422,6 +1579,15 @@ export default function ProjetDetailPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">Étapes logistiques ({logisticsSteps.length})</h2>
+              {isCoordinatorAdmin && (
+                <button
+                  onClick={() => setShowAddStepModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
+                  <Icon name="PlusIcon" size={14} />
+                  Ajouter une étape
+                </button>
+              )}
             </div>
             {logisticsSteps.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
@@ -1500,9 +1666,22 @@ export default function ProjetDetailPage() {
             ) : (
               <div className="space-y-2">
                 {risks.map((risk, i) => (
-                  <div key={i} className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
-                    <Icon name="ExclamationTriangleIcon" size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
-                    <p className="text-sm text-red-700">{risk}</p>
+                  <div
+                    key={i}
+                    className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${
+                      risk.severity === 'high'
+                        ? 'bg-red-50 border-red-200 text-red-700'
+                        : risk.severity === 'medium'
+                        ? 'bg-amber-50 border-amber-200 text-amber-700'
+                        : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                    }`}
+                  >
+                    <Icon
+                      name={risk.icon as Parameters<typeof Icon>[0]['name']}
+                      size={16}
+                      className="mt-0.5 flex-shrink-0"
+                    />
+                    <p className="text-sm">{risk.label}</p>
                   </div>
                 ))}
               </div>
@@ -1677,6 +1856,16 @@ export default function ProjetDetailPage() {
           existingParticipantOrgIds={participants.map((p) => p.organization_id)}
           onClose={() => setShowInviteModal(false)}
           onInvited={() => { setShowInviteModal(false); loadData(); }}
+        />
+      )}
+
+      {/* Add logistics step modal (E08bis) */}
+      {showAddStepModal && project && (
+        <AddLogisticsStepModal
+          project={project}
+          participants={participants}
+          onClose={() => setShowAddStepModal(false)}
+          onCreated={() => { setShowAddStepModal(false); loadData(); }}
         />
       )}
     </AppLayout>
