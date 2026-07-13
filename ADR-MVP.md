@@ -1001,6 +1001,45 @@ Aucune migration, aucun changement de comportement RLS — correctif frontend pu
 
 **État après cette session : correctif de stabilisation appliqué et vérifié statiquement sur 4 écrans (16 emplacements) + 1 fichier partagé créé. Reste à tester en direct (déclencher une erreur RLS volontaire sur un des 4 écrans pour confirmer que le vrai message Postgres s'affiche désormais) puis committer.**
 
+**Addendum (13 juillet 2026) :** correctif committé et poussé (`0ee181f`, 9 fichiers, 274+/29-). Validation live du correctif volontairement différée à la demande de l'utilisateur — sera confirmée naturellement à la prochaine erreur rencontrée pendant la préparation de la démo, sans test artificiel forcé.
+
+---
+
+## 9quinquatricies. Reset complet des données de démonstration — repartir à zéro plutôt que trier
+
+**Contexte :** en préparant la démo (§9duotricies, priorité « stabiliser + préparer la démo »), inventaire des données réelles a révélé un mélange de deux origines : (1) le seed pilote `Projet CCF-2026-Q3` (3 organisations réalistes — coordonnateur/manufacturier/recycleur — dupliqué à la fois dans `supabase/seeds/demo_ccf.sql`, isolé conformément à `MVP-DA-016`, et directement dans la migration `20260710999000_reset_and_reapply_ccf_full.sql`, qui a réellement été appliquée en production — violation de `MVP-DA-016` non corrigée, consignée pour visibilité) ; (2) les artefacts de test QA accumulés pendant le test end-to-end de cette session (« Test Organisation », « Test no 2 », projet « consolider Acton Vale », mandats/documents/étapes/rapport associés). L'utilisateur a demandé s'il valait mieux repartir à zéro plutôt que trier ce mélange.
+
+**Décision, après clarification de la portée exacte pour éviter de répéter `INC-DATA-01` :** vider les tables métier CCF (`TRUNCATE`, schéma intact, aucune migration) puis réappliquer uniquement le seed pilote propre, et rattacher les deux vrais comptes de test (`centredelasante@gmail.com`, `claudefairplay@hotmail.com`) aux organisations du seed pour pouvoir piloter la démo avec ces comptes réels plutôt qu'en simple consultation.
+
+**Risque identifié et écarté avant exécution :** `organizations` n'est pas une table exclusivement CCF — elle est aussi référencée par le domaine Transport (`raw_measurements`, `containers`, `scan_events`, confirmé fonctionnel en production, §9novodecies), par `invitations`, et par le domaine Agrégateurs. Un `TRUNCATE ... CASCADE` sur `organizations` aurait risqué de détruire de vraies données de suivi de conteneurs si elles existaient. **Vérifié en direct avant toute exécution** : les 5 organisations réelles (3 du seed + 2 de test QA) ont toutes 0 ligne dans `raw_measurements`/`containers`/`scan_events` — CASCADE confirmé sans risque. `profiles` (identité liée à `auth.users`) n'a aucune FK entrante depuis les tables truiquées — jamais affectée par le CASCADE, vérifié explicitement dans les migrations avant d'agir.
+
+**Exécuté et vérifié en trois étapes, chacune confirmée en direct dans le SQL Editor Supabase avant de passer à la suivante :**
+1. `TRUNCATE TABLE ai_assistance_logs, audit_logs, business_events, value_reports, logistics_steps, documents, project_participants, mandates, opportunity_capabilities, opportunities, ccf_projects, capabilities, organization_members, organizations CASCADE` — succès.
+2. Réapplication de `supabase/seeds/demo_ccf.sql` — succès confirmé par comptage (3 organisations, 1 projet, 2 mandats, 3 étapes, 1 rapport, exactement les chiffres attendus).
+3. Rattachement des 2 comptes réels — `centredelasante@gmail.com` admin de « Centre de Consolidation Ferroviaire Québec » (coordonnateur), `claudefairplay@hotmail.com` membre d'« Acier Laurentien Inc. » (manufacturier participant) — confirmé par requête de vérification.
+
+**Note non résolue :** `documents.storage_path` référençait des fichiers dans le bucket Storage — le `TRUNCATE` a vidé les lignes mais pas les fichiers eux-mêmes, qui restent orphelins dans Storage (inoffensifs mais inutilisés). Nettoyage séparé possible si souhaité, non fait ici.
+
+**État après cette session : reset complet exécuté et vérifié au niveau base de données, puis validé en direct dans le navigateur** — connexion avec `centredelasante@gmail.com`, `/projets` affiche correctement « 1 projet accessible », le projet du seed (coordonné par Centre de Consolidation Ferroviaire Québec, statut Exécution). **Préparation des données de démo terminée.** Reste : rédiger le script de démonstration pas à pas.
+
+**Addendum** : script de démonstration rédigé (`Script-Demo-CCF.md`) — trame de 12-15 minutes, comptes réels identifiés par organisation/rôle, piège signalé (onglet Documents actuellement vide suite au reset, à traiter avant ou pendant la démo).
+
+---
+
+## 9sextricies. Constat d'architecture — le catalogue `mandate_actions` n'est exploité que pour une seule action sur dix
+
+**Contexte :** poursuite de l'audit de stabilisation (suite à §9quatertricies), cette fois sur le volet RLS/permissions plutôt que le frontend. Vérification systématique, pour chacune des 10 actions du catalogue fermé `mandate_actions` (`read_capabilities`, `propose_participation`, `invite_project_org`, `accept_project_invitation`, `manage_project_participants`, `approve_documents`, `submit_logistics_proof`, `update_logistics_step`, `generate_value_report`, `request_ai_summary`), qu'au moins une policy RLS ou une RPC consulte réellement `mandates.permissions->actions` pour cette action — règle §1 point 6 du `ROCKET_REVIEW_CHECKLIST.md`, déjà à l'origine d'`INC-S07-01` (`approve_documents`, trouvé absent puis corrigé, voir §7bis/tâches 11-12).
+
+**Constat, confirmé par grep exhaustif sur toutes les migrations :** en dehors d'`approve_documents` (corrigé), **aucune des 9 autres actions n'apparaît nulle part ailleurs que dans le `INSERT` du catalogue lui-même.** Vérifié précisément sur les 3 policies d'insertion les plus susceptibles de s'y référer : `project_participants_coordinator_insert`, `logistics_steps_coordinator_insert` et `value_reports_coordinator_insert` sont **toutes les trois** conditionnées uniquement par `is_organization_owner(p.coordinator_org_id)` — aucune ne lit `mandates.permissions` pour vérifier si le mandat de l'organisation invitante/participante autorise spécifiquement `invite_project_org`, `manage_project_participants`, `submit_logistics_proof`, `update_logistics_step` ou `generate_value_report`. Cohérent avec le message d'erreur déjà observé sur la mise à jour d'étape logistique (« vous devez être admin ou avoir un profil terrain dans l'organisation responsable ») — la vérification réelle passe par le rôle/profil au sein de l'organisation responsable, jamais par le contenu du mandat.
+
+**Ce que ça implique concrètement :** le trigger `validate_mandate_permissions()` (RT-07) garantit que le tableau `permissions.actions[]` d'un mandat ne contient que des codes valides et non vide — une garantie d'intégrité référentielle, pas d'application fonctionnelle. Choisir les 5 actions du mandat manufacturier dans le seed de démo (`read_capabilities`, `invite_project_org`, `manage_project_participants`, `submit_logistics_proof`, `update_logistics_step`) n'a aujourd'hui d'autre effet que d'être stocké et affiché — ces cases à cocher ne débloquent techniquement rien de plus que ce que le rôle d'organisation (coordonnateur vs participant) permet déjà par ailleurs.
+
+**Direction du risque, à préciser :** ce n'est pas une brèche de sécurité — rien n'est accordé en trop par cette lacune, c'est l'inverse : des permissions affichées comme accordées par un mandat n'ont en réalité aucun effet, et l'accès réel reste plus restrictif (coordonnateur seul) que ce que le mandat laisse croire à l'utilisateur. Risque fonctionnel/UX (attentes non tenues), pas risque de sécurité.
+
+**Décision, en attente de l'utilisateur :** ne rien modifier dans l'immédiat — implémenter une vérification RLS pour 8 actions supplémentaires est un changement structurant, pas un correctif ponctuel, et le faire juste avant une démo comporte un risque de casser un parcours déjà validé. Consigné ici comme constat d'architecture à trancher délibérément : soit accepter que le catalogue reste déclaratif/documentaire pour le MVP (mettre à jour la documentation utilisateur en conséquence), soit planifier l'implémentation RLS complète comme un chantier distinct, hors période de démo.
+
+**État après cette session : constat documenté, aucune modification de policy. En attente de décision sur la suite.**
+
 ---
 
 ## 10. Suite de validation automatisée
