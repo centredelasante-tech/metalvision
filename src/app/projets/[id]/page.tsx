@@ -298,7 +298,16 @@ function InviteOrganizationModal({
 
     setSaving(true);
 
-    // Step 1: INSERT mandates — status='pending_acceptance' sent explicitly (direct invite, not draft)
+    // Step 1a: INSERT mandates — status='draft' obligatoire à l'insertion.
+    // La policy RLS réellement active (mandates_insert_issuer_admin, migration
+    // ccf_012/S06) exige WITH CHECK (is_org_admin(issuer_org_id) AND status =
+    // 'draft') — insérer directement en 'pending_acceptance' viole cette policy
+    // (INC-E08-01, trouvé en test live le 13 juillet : "new row violates
+    // row-level security policy for table mandates"). Le passage à
+    // 'pending_acceptance' se fait donc en une 2e étape via UPDATE, couverte
+    // par mandates_update_issuance_by_issuer (USING status='draft' WITH CHECK
+    // status='pending_acceptance') — même schéma en deux temps que handleSend
+    // dans /mandats, un seul clic côté utilisateur malgré les deux appels DB.
     const { data: mandate, error: mandateErr } = await supabase
       .from('mandates')
       .insert({
@@ -306,7 +315,7 @@ function InviteOrganizationModal({
         receiver_org_id: form.receiver_org_id,
         mandate_scope: form.mandate_scope,
         permissions: { actions: form.actions },
-        status: 'pending_acceptance',
+        status: 'draft',
         start_date: form.start_date || null,
         end_date: form.end_date || null,
       })
@@ -326,6 +335,20 @@ function InviteOrganizationModal({
     }
 
     const mandateId = mandate.id;
+
+    // Step 1b: UPDATE mandates SET status='pending_acceptance' — transition
+    // couverte par mandates_update_issuance_by_issuer, voir commentaire ci-dessus.
+    const { error: sendErr } = await supabase
+      .from('mandates')
+      .update({ status: 'pending_acceptance', updated_at: new Date().toISOString() })
+      .eq('id', mandateId);
+
+    if (sendErr) {
+      const msg = (sendErr as { message?: string }).message ?? String(sendErr);
+      setError(`Mandat créé (${mandateId.slice(0, 8)}…) mais erreur lors de l'envoi : ${msg}`);
+      setSaving(false);
+      return;
+    }
 
     // Step 2: INSERT project_participants — status='invited', role='contributeur'
     const { error: participantErr } = await supabase
