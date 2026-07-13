@@ -22,6 +22,9 @@ Thumbs.db
 # Vercel deployment
 .vercel/
 
+# Supabase CLI local cache (project-ref, pooler info — spécifique à la machine)
+supabase/.temp/
+
 # Optional: if using TypeScript
 *.tsbuildinfo
 
