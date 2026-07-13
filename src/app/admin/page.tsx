@@ -14,7 +14,6 @@ interface AuditLog {
   table_name: string;
   record_id: string | null;
   created_at: string;
-  actor_name?: string | null;
 }
 
 interface PlatformStats {
@@ -26,19 +25,20 @@ interface PlatformStats {
   mandates: number;
 }
 
-interface MandateAction {
-  code: string;
-  label: string;
-  description: string | null;
-}
-
 // ─── Static Catalogues ────────────────────────────────────────────────────────
-// NOTE (revue PR) : mandate_actions est une vraie table seedée en base
-// (supabase/migrations/20260710003000_ccf_003_mandates.sql), pas un ENUM —
-// contrairement à mandate_scope/logistics_step_type/ccf_event_type ci-dessous.
-// Elle est donc interrogée en direct (voir fetchMandateActions plus bas),
-// jamais codée en dur : une liste inventée aurait affiché un faux catalogue
-// à un admin plateforme qui s'attend à voir les vraies données.
+
+const MANDATE_ACTIONS = [
+  { code: 'collect',      label: 'Collecte de matières' },
+  { code: 'sort',         label: 'Tri et classification' },
+  { code: 'transport',    label: 'Transport' },
+  { code: 'store',        label: 'Entreposage' },
+  { code: 'process',      label: 'Traitement / transformation' },
+  { code: 'certify',      label: 'Certification / vérification' },
+  { code: 'report',       label: 'Rapport de valeur' },
+  { code: 'coordinate',   label: 'Coordination de projet' },
+  { code: 'finance',      label: 'Financement / crédit carbone' },
+  { code: 'communicate',  label: 'Communication / diffusion' },
+];
 
 const MANDATE_SCOPES = [
   { code: 'collecte_tri',         label: 'Collecte & tri' },
@@ -200,8 +200,6 @@ export default function AdminPage() {
   const [auditTableFilter, setAuditTableFilter] = useState('');
   const [auditActionFilter, setAuditActionFilter] = useState('');
   const [activeTab, setActiveTab] = useState<TabId>('overview');
-  const [mandateActions, setMandateActions] = useState<MandateAction[]>([]);
-  const [mandateActionsLoading, setMandateActionsLoading] = useState(true);
 
   // ── Access gate ─────────────────────────────────────────────────────────────
   // Probe audit_logs — RLS policy "audit_logs_superadmin_select" uses
@@ -255,28 +253,7 @@ export default function AdminPage() {
     if (auditTableFilter) query = query.eq('table_name', auditTableFilter);
     if (auditActionFilter) query = query.eq('action', auditActionFilter);
     const { data } = await query;
-    const logs = (data as AuditLog[]) ?? [];
-
-    // Résoudre le nom de l'acteur via profiles (profiles_superadmin_select,
-    // voir ADR-MVP.md §9unvicies — sans cette policy la jointure échouerait
-    // silencieusement pour tout acteur hors organisation du superadmin).
-    const actorIds = [...new Set(logs.map((l) => l.actor_id).filter((id): id is string => !!id))];
-    if (actorIds.length > 0) {
-      const { data: profilesData } = await supabase
-        .from('profiles')
-        .select('id, full_name, email')
-        .in('id', actorIds);
-      const nameById = new Map(
-        ((profilesData as { id: string; full_name: string | null; email: string }[]) ?? []).map(
-          (p) => [p.id, p.full_name || p.email || null]
-        )
-      );
-      logs.forEach((l) => {
-        l.actor_name = l.actor_id ? nameById.get(l.actor_id) ?? null : null;
-      });
-    }
-
-    setAuditLogs(logs);
+    setAuditLogs((data as AuditLog[]) ?? []);
     setAuditLoading(false);
   }, [isSuperAdmin, auditTableFilter, auditActionFilter]);
 
@@ -288,28 +265,11 @@ export default function AdminPage() {
     if (isSuperAdmin && activeTab === 'audit') fetchAuditLogs();
   }, [isSuperAdmin, activeTab, fetchAuditLogs]);
 
-  // ── Mandate actions catalogue (table réelle, pas un ENUM) ────────────────────
-  const fetchMandateActions = useCallback(async () => {
-    if (!isSuperAdmin) return;
-    setMandateActionsLoading(true);
-    const supabase = createClient();
-    const { data } = await supabase
-      .from('mandate_actions')
-      .select('code, label, description')
-      .order('code');
-    setMandateActions((data as MandateAction[]) ?? []);
-    setMandateActionsLoading(false);
-  }, [isSuperAdmin]);
-
-  useEffect(() => {
-    if (isSuperAdmin) fetchMandateActions();
-  }, [isSuperAdmin, fetchMandateActions]);
-
   // ── Render ──────────────────────────────────────────────────────────────────
 
   if (!accessChecked) {
     return (
-      <AppLayout activeRoute="/admin">
+      <AppLayout activeRoute="/admin" userRole="admin">
         <div className="flex items-center justify-center min-h-[60vh]">
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -322,14 +282,14 @@ export default function AdminPage() {
 
   if (!isSuperAdmin) {
     return (
-      <AppLayout activeRoute="/admin">
+      <AppLayout activeRoute="/admin" userRole="admin">
         <AccessDenied />
       </AppLayout>
     );
   }
 
   return (
-    <AppLayout activeRoute="/admin">
+    <AppLayout activeRoute="/admin" userRole="admin">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
         {/* Header */}
@@ -489,14 +449,8 @@ export default function AdminPage() {
                           <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
                             {log.record_id ? truncateId(log.record_id) : '—'}
                           </td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground">
-                            {log.actor_id ? (
-                              <span className={log.actor_name ? '' : 'font-mono'}>
-                                {log.actor_name ?? truncateId(log.actor_id)}
-                              </span>
-                            ) : (
-                              <span className="italic">système</span>
-                            )}
+                          <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
+                            {log.actor_id ? truncateId(log.actor_id) : <span className="italic">système</span>}
                           </td>
                         </tr>
                       ))
@@ -521,7 +475,7 @@ export default function AdminPage() {
             <div>
               <SectionTitle
                 title="Actions de mandat (mandate_actions)"
-                subtitle="Table mandate_actions — actions autorisées dans les mandats inter-organisations"
+                subtitle="Catalogue fixe des 10 actions autorisées dans les mandats inter-organisations"
               />
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
@@ -532,24 +486,14 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mandateActionsLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => <TableRowSkeleton key={i} cols={2} />)
-                    ) : mandateActions.length === 0 ? (
-                      <tr>
-                        <td colSpan={2} className="px-4 py-8 text-center text-muted-foreground text-sm">
-                          Aucune action de mandat trouvée.
+                    {MANDATE_ACTIONS.map((a) => (
+                      <tr key={a.code} className="border-b border-border last:border-0 hover:bg-muted/20">
+                        <td className="px-4 py-3">
+                          <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">{a.code}</code>
                         </td>
+                        <td className="px-4 py-3 text-sm text-foreground">{a.label}</td>
                       </tr>
-                    ) : (
-                      mandateActions.map((a) => (
-                        <tr key={a.code} className="border-b border-border last:border-0 hover:bg-muted/20">
-                          <td className="px-4 py-3">
-                            <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">{a.code}</code>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-foreground">{a.label}</td>
-                        </tr>
-                      ))
-                    )}
+                    ))}
                   </tbody>
                 </table>
               </div>

@@ -208,7 +208,6 @@ interface InviteOrganizationModalProps {
   project: CcfProject;
   actorId: string;
   allOrganizations: Organization[];
-  existingParticipantOrgIds: string[];
   onClose: () => void;
   onInvited: () => void;
 }
@@ -232,7 +231,6 @@ function InviteOrganizationModal({
   project,
   actorId,
   allOrganizations,
-  existingParticipantOrgIds,
   onClose,
   onInvited,
 }: InviteOrganizationModalProps) {
@@ -261,14 +259,9 @@ function InviteOrganizationModal({
     load();
   }, [supabase]);
 
-  // Orgs available to invite: all except the coordinator org AND organisations
-  // already participantes (invited/active/declined/removed) -- sans ce filtre,
-  // re-inviter une organisation deja liee provoque une erreur brute "duplicate
-  // key value violates unique constraint project_participants_..._key" au lieu
-  // d'un message clair (meme classe de bug observee en direct sur
-  // opportunity_capabilities pendant le test end-to-end, revue PR 13 juillet).
+  // Orgs available to invite: all except the coordinator org
   const invitableOrgs = allOrganizations.filter(
-    o => o.id !== project.coordinator_org_id && !existingParticipantOrgIds.includes(o.id)
+    o => o.id !== project.coordinator_org_id
   );
 
   const toggleAction = (code: string) => {
@@ -298,16 +291,7 @@ function InviteOrganizationModal({
 
     setSaving(true);
 
-    // Step 1a: INSERT mandates — status='draft' obligatoire à l'insertion.
-    // La policy RLS réellement active (mandates_insert_issuer_admin, migration
-    // ccf_012/S06) exige WITH CHECK (is_org_admin(issuer_org_id) AND status =
-    // 'draft') — insérer directement en 'pending_acceptance' viole cette policy
-    // (INC-E08-01, trouvé en test live le 13 juillet : "new row violates
-    // row-level security policy for table mandates"). Le passage à
-    // 'pending_acceptance' se fait donc en une 2e étape via UPDATE, couverte
-    // par mandates_update_issuance_by_issuer (USING status='draft' WITH CHECK
-    // status='pending_acceptance') — même schéma en deux temps que handleSend
-    // dans /mandats, un seul clic côté utilisateur malgré les deux appels DB.
+    // Step 1: INSERT mandates — status='pending_acceptance' sent explicitly (direct invite, not draft)
     const { data: mandate, error: mandateErr } = await supabase
       .from('mandates')
       .insert({
@@ -315,7 +299,7 @@ function InviteOrganizationModal({
         receiver_org_id: form.receiver_org_id,
         mandate_scope: form.mandate_scope,
         permissions: { actions: form.actions },
-        status: 'draft',
+        status: 'pending_acceptance',
         start_date: form.start_date || null,
         end_date: form.end_date || null,
       })
@@ -335,20 +319,6 @@ function InviteOrganizationModal({
     }
 
     const mandateId = mandate.id;
-
-    // Step 1b: UPDATE mandates SET status='pending_acceptance' — transition
-    // couverte par mandates_update_issuance_by_issuer, voir commentaire ci-dessus.
-    const { error: sendErr } = await supabase
-      .from('mandates')
-      .update({ status: 'pending_acceptance', updated_at: new Date().toISOString() })
-      .eq('id', mandateId);
-
-    if (sendErr) {
-      const msg = (sendErr as { message?: string }).message ?? String(sendErr);
-      setError(`Mandat créé (${mandateId.slice(0, 8)}…) mais erreur lors de l'envoi : ${msg}`);
-      setSaving(false);
-      return;
-    }
 
     // Step 2: INSERT project_participants — status='invited', role='contributeur'
     const { error: participantErr } = await supabase
@@ -409,9 +379,7 @@ function InviteOrganizationModal({
               Organisation à inviter <span className="text-red-500">*</span>
             </label>
             {invitableOrgs.length === 0 ? (
-              <p className="text-sm text-muted-foreground italic">
-                Aucune organisation disponible — toutes les organisations existantes participent déjà à ce projet, ou aucune autre organisation n'existe.
-              </p>
+              <p className="text-sm text-muted-foreground italic">Aucune autre organisation disponible.</p>
             ) : (
               <select
                 className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -885,6 +853,162 @@ function LogisticsStepCard({ step, canEdit, actorId, coordinatorOrgId, onUpdated
   );
 }
 
+// ─── Add Logistics Step Modal ─────────────────────────────────────────────────
+
+interface AddLogisticsStepModalProps {
+  project: CcfProject;
+  participants: ProjectParticipant[];
+  onClose: () => void;
+  onCreated: () => void;
+}
+
+function AddLogisticsStepModal({ project, participants, onClose, onCreated }: AddLogisticsStepModalProps) {
+  const supabase = createClient();
+
+  // Active participant organizations (including coordinator who is always active)
+  const activeParticipantOrgs: Organization[] = participants
+    .filter(p => p.status === 'active')
+    .map(p => ({ id: p.organization_id, name: p.organization?.name ?? p.organization_id.slice(0, 8) }));
+
+  const [form, setForm] = useState({
+    step_type: '' as LogisticsStepType | '',
+    responsible_org_id: '',
+    planned_date: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!form.step_type) { setError('Sélectionnez un type d\'étape.'); return; }
+    if (!form.responsible_org_id) { setError('Sélectionnez une organisation responsable.'); return; }
+
+    setSaving(true);
+
+    const { error: insertErr } = await supabase
+      .from('logistics_steps')
+      .insert({
+        project_id: project.id,
+        step_type: form.step_type,
+        responsible_org_id: form.responsible_org_id,
+        planned_date: form.planned_date || null,
+        status: 'planned',
+      });
+
+    if (insertErr) {
+      const msg = (insertErr as { message?: string }).message ?? String(insertErr);
+      setError(`Erreur lors de la création : ${msg}`);
+      setSaving(false);
+      return;
+    }
+
+    setSaving(false);
+    onCreated();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card rounded-xl border border-border shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Ajouter une étape logistique</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Statut initial : Planifié</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <Icon name="XMarkIcon" size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Step type */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Type d&apos;étape <span className="text-red-500">*</span>
+            </label>
+            <select
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.step_type}
+              onChange={e => setForm(p => ({ ...p, step_type: e.target.value as LogisticsStepType }))}
+              required
+            >
+              <option value="">— Sélectionner un type —</option>
+              {(Object.entries(LOGISTICS_STEP_TYPE_LABELS) as [LogisticsStepType, string][]).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Responsible org — active participants only */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">
+              Organisation responsable <span className="text-red-500">*</span>
+            </label>
+            {activeParticipantOrgs.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">Aucun participant actif disponible.</p>
+            ) : (
+              <select
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                value={form.responsible_org_id}
+                onChange={e => setForm(p => ({ ...p, responsible_org_id: e.target.value }))}
+                required
+              >
+                <option value="">— Sélectionner une organisation —</option>
+                {activeParticipantOrgs.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Planned date (optional) */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-1">Date planifiée</label>
+            <input
+              type="date"
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={form.planned_date}
+              onChange={e => setForm(p => ({ ...p, planned_date: e.target.value }))}
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 flex items-start gap-2">
+              <Icon name="ExclamationTriangleIcon" size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || activeParticipantOrgs.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              {saving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Icon name="PlusIcon" size={16} />
+              )}
+              {saving ? 'Création en cours…' : 'Ajouter'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 type ActiveTab = 'participants' | 'logistics' | 'documents' | 'risks' | 'value_report' | 'history';
@@ -915,6 +1039,7 @@ export default function ProjetDetailPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('participants');
   const [showDocUploader, setShowDocUploader] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showAddStepModal, setShowAddStepModal] = useState(false);
 
   // Phase/status edit
   const [editingPhase, setEditingPhase] = useState(false);
@@ -1129,7 +1254,6 @@ export default function ProjetDetailPage() {
         status: vrForm.status,
       };
 
-      let valueReportId: string = editingVR?.id ?? '';
       if (editingVR) {
         const { error: err } = await supabase
           .from('value_reports')
@@ -1137,23 +1261,17 @@ export default function ProjetDetailPage() {
           .eq('id', editingVR.id);
         if (err) throw err;
       } else {
-        const { data: inserted, error: err } = await supabase
+        const { error: err } = await supabase
           .from('value_reports')
-          .insert(payload)
-          .select('id')
-          .single();
+          .insert(payload);
         if (err) throw err;
-        valueReportId = inserted.id;
       }
 
       // Manual business_event — no RPC handles this
-      // INC-S05-02 : object_id doit référencer la ligne value_reports elle-même
-      // (convention établie en S07/ccf_006e : object_id = id de l'objet visé,
-      // jamais l'id du projet parent), pas project.id.
       await supabase.from('business_events').insert({
         event_type: 'value_report_generated',
         object_type: 'value_report',
-        object_id: valueReportId,
+        object_id: project.id,
         actor_id: actorId,
         organization_id: project.coordinator_org_id,
         payload: { project_id: project.id, status: vrForm.status },
@@ -1172,10 +1290,9 @@ export default function ProjetDetailPage() {
 
   // ─── Risks (frontend-calculated, no DB table) ──────────────────────────────
 
-  const risks = React.useMemo(
-    () => computeProjectRisks(logisticsSteps, project, participants),
-    [logisticsSteps, project, participants],
-  );
+  const risks = React.useMemo(() => {
+    return computeProjectRisks(logisticsSteps, project, participants);
+  }, [logisticsSteps, project, participants]);
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -1422,11 +1539,20 @@ export default function ProjetDetailPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">Étapes logistiques ({logisticsSteps.length})</h2>
+              {isCoordinatorAdmin && (
+                <button
+                  onClick={() => setShowAddStepModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
+                  <Icon name="PlusIcon" size={14} />
+                  Ajouter une étape
+                </button>
+              )}
             </div>
             {logisticsSteps.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                 <Icon name="TruckIcon" size={32} />
-                <p className="text-sm">Aucune étape logistique pour ce projet.</p>
+                <p className="text-sm">Aucune étape logistique enregistrée.</p>
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1450,36 +1576,37 @@ export default function ProjetDetailPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">Documents ({documents.length})</h2>
-              {isCoordinatorAdmin && (
+              {myAdminOrgIds.length > 0 && (
                 <button
                   onClick={() => setShowDocUploader(true)}
                   className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
                   <Icon name="ArrowUpTrayIcon" size={14} />
-                  Déposer un document
+                  Déposer
                 </button>
               )}
             </div>
             {documents.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                 <Icon name="FolderOpenIcon" size={32} />
-                <p className="text-sm">Aucun document pour ce projet.</p>
+                <p className="text-sm">Aucun document rattaché à ce projet.</p>
               </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
                 {documents.map((doc) => {
-                  const cfg = DOC_STATUS_CONFIG[doc.status];
+                  const cfg = DOC_STATUS_CONFIG[doc.status] ?? DOC_STATUS_CONFIG.draft;
                   return (
-                    <div key={doc.id} className="bg-card border border-border rounded-xl p-4">
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <p className="text-sm font-semibold text-foreground truncate">{doc.title}</p>
-                        <span className={`inline-flex items-center rounded-full text-xs font-semibold px-2 py-0.5 border flex-shrink-0 ${cfg.cls}`}>
-                          {cfg.label}
-                        </span>
+                    <div key={doc.id} className="flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3">
+                      <Icon name="DocumentIcon" size={20} className="text-muted-foreground flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {doc.category && `${doc.category} · `}v{doc.version} · {new Date(doc.created_at).toLocaleDateString('fr-CA')}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {doc.category ?? '—'} · v{doc.version}
-                      </p>
+                      <span className={`inline-flex items-center rounded-full text-xs font-semibold px-2 py-0.5 border ${cfg.cls}`}>
+                        {cfg.label}
+                      </span>
                     </div>
                   );
                 })}
@@ -1488,21 +1615,40 @@ export default function ProjetDetailPage() {
           </div>
         )}
 
-        {/* RISKS */}
+        {/* RISKS (frontend-calculated) */}
         {activeTab === 'risks' && (
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-foreground">Risques détectés ({risks.length})</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-foreground">Indicateurs de risque</h2>
+              <span className="text-xs text-muted-foreground">Calculé automatiquement · Aucune donnée en base</span>
+            </div>
             {risks.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
-                <Icon name="ShieldCheckIcon" size={32} />
-                <p className="text-sm">Aucun risque détecté.</p>
+              <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+                <div className="w-12 h-12 rounded-full bg-green-50 border border-green-200 flex items-center justify-center">
+                  <Icon name="CheckCircleIcon" size={24} className="text-green-600" />
+                </div>
+                <p className="text-sm font-medium text-green-700">Aucun risque détecté</p>
+                <p className="text-xs text-muted-foreground text-center max-w-xs">
+                  Pas d'étape bloquée, date cible non dépassée, aucune invitation refusée.
+                </p>
               </div>
             ) : (
               <div className="space-y-2">
-                {risks.map((risk, i) => (
-                  <div key={i} className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
-                    <Icon name="ExclamationTriangleIcon" size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
-                    <p className="text-sm text-red-700">{risk}</p>
+                {risks.map((risk, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${
+                      risk.severity === 'high' ?'bg-red-50 border-red-200 text-red-700'
+                        : risk.severity === 'medium' ?'bg-amber-50 border-amber-200 text-amber-700' :'bg-yellow-50 border-yellow-200 text-yellow-700'
+                    }`}
+                  >
+                    <Icon name={risk.icon as Parameters<typeof Icon>[0]['name']} size={18} className="flex-shrink-0" />
+                    <p className="text-sm font-medium">{risk.label}</p>
+                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                      risk.severity === 'high' ? 'bg-red-100 border-red-300' : risk.severity === 'medium' ? 'bg-amber-100 border-amber-300' : 'bg-yellow-100 border-yellow-300'
+                    }`}>
+                      {risk.severity === 'high' ? 'Élevé' : risk.severity === 'medium' ? 'Moyen' : 'Faible'}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1512,137 +1658,149 @@ export default function ProjetDetailPage() {
 
         {/* VALUE REPORT */}
         {activeTab === 'value_report' && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-foreground">Rapport de valeur</h2>
+              <h2 className="text-sm font-semibold text-foreground">Rapports de valeur ({valueReports.length})</h2>
               {isCoordinatorAdmin && !showVRForm && (
                 <button
-                  onClick={() => {
-                    const latest = valueReports[0];
-                    if (latest) {
-                      setEditingVR(latest);
-                      setVrForm({
-                        volume: latest.volume?.toString() ?? '',
-                        coordination_value: latest.coordination_value?.toString() ?? '',
-                        notes: latest.notes ?? '',
-                        status: latest.status,
-                      });
-                    } else {
-                      setEditingVR(null);
-                      setVrForm({ volume: '', coordination_value: '', notes: '', status: 'draft' });
-                    }
-                    setShowVRForm(true);
-                  }}
+                  onClick={() => { setShowVRForm(true); setEditingVR(null); setVrForm({ volume: '', coordination_value: '', notes: '', status: 'draft' }); }}
                   className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
-                  <Icon name={valueReports.length > 0 ? 'PencilSquareIcon' : 'PlusIcon'} size={14} />
-                  {valueReports.length > 0 ? 'Modifier' : 'Créer'}
+                  <Icon name="PlusIcon" size={14} />
+                  Nouveau rapport
                 </button>
               )}
             </div>
 
+            {/* VR Form */}
             {showVRForm && isCoordinatorAdmin && (
-              <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+              <div className="bg-card border border-border rounded-xl p-5">
+                <h3 className="text-sm font-semibold text-foreground mb-4">
+                  {editingVR ? 'Modifier le rapport' : 'Nouveau rapport de valeur'}
+                </h3>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">Volume</label>
+                      <input
+                        type="number"
+                        value={vrForm.volume}
+                        onChange={(e) => setVrForm((p) => ({ ...p, volume: e.target.value }))}
+                        placeholder="ex. 1500"
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">Valeur de coordination</label>
+                      <input
+                        type="number"
+                        value={vrForm.coordination_value}
+                        onChange={(e) => setVrForm((p) => ({ ...p, coordination_value: e.target.value }))}
+                        placeholder="ex. 2500"
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                    </div>
+                  </div>
                   <div>
-                    <label className="block text-xs font-medium text-foreground mb-1.5">Volume (t)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={vrForm.volume}
-                      onChange={(e) => setVrForm((p) => ({ ...p, volume: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    <label className="block text-xs font-medium text-foreground mb-1.5">Notes</label>
+                    <textarea
+                      value={vrForm.notes}
+                      onChange={(e) => setVrForm((p) => ({ ...p, notes: e.target.value }))}
+                      rows={3}
+                      placeholder="Observations, contexte…"
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-foreground mb-1.5">Valeur de coordination ($)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={vrForm.coordination_value}
-                      onChange={(e) => setVrForm((p) => ({ ...p, coordination_value: e.target.value }))}
+                    <label className="block text-xs font-medium text-foreground mb-1.5">Statut</label>
+                    <select
+                      value={vrForm.status}
+                      onChange={(e) => setVrForm((p) => ({ ...p, status: e.target.value as ValueReportStatus }))}
                       className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
+                    >
+                      {(Object.keys(VALUE_REPORT_STATUS_CONFIG) as ValueReportStatus[]).map((s) => (
+                        <option key={s} value={s}>{VALUE_REPORT_STATUS_CONFIG[s].label}</option>
+                      ))}
+                    </select>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">Notes</label>
-                  <textarea
-                    value={vrForm.notes}
-                    onChange={(e) => setVrForm((p) => ({ ...p, notes: e.target.value }))}
-                    rows={3}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">Statut</label>
-                  <select
-                    value={vrForm.status}
-                    onChange={(e) => setVrForm((p) => ({ ...p, status: e.target.value as ValueReportStatus }))}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  >
-                    {Object.keys(VALUE_REPORT_STATUS_CONFIG).map((s) => (
-                      <option key={s} value={s}>{VALUE_REPORT_STATUS_CONFIG[s as ValueReportStatus].label}</option>
-                    ))}
-                  </select>
-                </div>
-                {vrError && (
-                  <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                    <Icon name="ExclamationCircleIcon" size={14} />
-                    {vrError}
+                  {vrError && (
+                    <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                      <Icon name="ExclamationCircleIcon" size={16} className="flex-shrink-0 mt-0.5" />
+                      <span>{vrError}</span>
+                    </div>
+                  )}
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowVRForm(false); setEditingVR(null); setVrError(null); }}
+                      className="px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      onClick={handleVRSave}
+                      disabled={vrLoading}
+                      className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                    >
+                      {vrLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
+                      Enregistrer
+                    </button>
                   </div>
-                )}
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => { setShowVRForm(false); setVrError(null); }}
-                    className="px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors"
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    onClick={handleVRSave}
-                    disabled={vrLoading}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                  >
-                    {vrLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
-                    Enregistrer
-                  </button>
                 </div>
               </div>
             )}
 
-            {!showVRForm && valueReports.length === 0 && (
+            {/* VR List */}
+            {valueReports.length === 0 && !showVRForm ? (
               <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                 <Icon name="ChartBarIcon" size={32} />
                 <p className="text-sm">Aucun rapport de valeur pour ce projet.</p>
               </div>
-            )}
-
-            {!showVRForm && valueReports.map((vr) => (
-              <div key={vr.id} className="bg-card border border-border rounded-xl p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className={`inline-flex items-center rounded-full text-xs font-semibold px-2 py-0.5 border ${VALUE_REPORT_STATUS_CONFIG[vr.status].cls}`}>
-                    {VALUE_REPORT_STATUS_CONFIG[vr.status].label}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(vr.created_at).toLocaleDateString('fr-CA')}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[11px] text-muted-foreground uppercase tracking-wide font-semibold">Volume</p>
-                    <p className="text-sm font-semibold text-foreground">{vr.volume != null ? `${vr.volume} t` : '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] text-muted-foreground uppercase tracking-wide font-semibold">Valeur de coordination</p>
-                    <p className="text-sm font-semibold text-foreground">{vr.coordination_value != null ? `${vr.coordination_value.toLocaleString('fr-CA')} $` : '—'}</p>
-                  </div>
-                </div>
-                {vr.notes && (
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{vr.notes}</p>
-                )}
+            ) : (
+              <div className="space-y-3">
+                {valueReports.map((vr) => {
+                  const cfg = VALUE_REPORT_STATUS_CONFIG[vr.status] ?? VALUE_REPORT_STATUS_CONFIG.draft;
+                  return (
+                    <div key={vr.id} className="bg-card border border-border rounded-xl p-4">
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <p className="text-xs text-muted-foreground">{new Date(vr.created_at).toLocaleDateString('fr-CA')}</p>
+                        <span className={`inline-flex items-center rounded-full text-xs font-semibold px-2 py-0.5 border ${cfg.cls}`}>
+                          {cfg.label}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4 mb-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Volume</p>
+                          <p className="text-lg font-bold text-foreground">{vr.volume != null ? vr.volume.toLocaleString('fr-CA') : '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Valeur de coordination</p>
+                          <p className="text-lg font-bold text-foreground">{vr.coordination_value != null ? vr.coordination_value.toLocaleString('fr-CA') : '—'}</p>
+                        </div>
+                      </div>
+                      {vr.notes && <p className="text-sm text-muted-foreground">{vr.notes}</p>}
+                      {isCoordinatorAdmin && (
+                        <button
+                          onClick={() => {
+                            setEditingVR(vr);
+                            setVrForm({
+                              volume: vr.volume?.toString() ?? '',
+                              coordination_value: vr.coordination_value?.toString() ?? '',
+                              notes: vr.notes ?? '',
+                              status: vr.status,
+                            });
+                            setShowVRForm(true);
+                          }}
+                          className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-2"
+                        >
+                          <Icon name="PencilSquareIcon" size={12} />
+                          Modifier
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
         )}
 
@@ -1674,9 +1832,18 @@ export default function ProjetDetailPage() {
           project={project}
           actorId={actorId}
           allOrganizations={organizations}
-          existingParticipantOrgIds={participants.map((p) => p.organization_id)}
           onClose={() => setShowInviteModal(false)}
           onInvited={() => { setShowInviteModal(false); loadData(); }}
+        />
+      )}
+
+      {/* Add logistics step modal */}
+      {showAddStepModal && project && participants && (
+        <AddLogisticsStepModal
+          project={project}
+          participants={participants}
+          onClose={() => setShowAddStepModal(false)}
+          onCreated={() => { setShowAddStepModal(false); loadData(); }}
         />
       )}
     </AppLayout>

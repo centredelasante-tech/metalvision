@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '@/components/ui/AppIcon';
 import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import type { ContainerData } from './QRScannerContent';
 
 type ScanState = 'idle' | 'scanning' | 'processing' | 'done' | 'error';
@@ -11,6 +12,7 @@ interface QRScannerViewfinderProps {
 }
 
 export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderProps) {
+  const { user } = useAuth();
   const [scanState, setScanState] = useState<ScanState>('idle');
   const [torchOn, setTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
@@ -47,16 +49,15 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
     stopStream();
 
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
 
     const { data: memberData } = await supabase
-      .from('organization_members')
-      .select('organization_id')
+      .from('company_members')
+      .select('company_id')
       .eq('user_id', user?.id)
       .limit(1)
       .single();
 
-    const userCompanyId = memberData?.organization_id ?? null;
+    const userCompanyId = memberData?.company_id ?? null;
 
     const { data: containers, error } = await supabase
       .from('containers')
@@ -116,7 +117,7 @@ export default function QRScannerViewfinder({ onResult }: QRScannerViewfinderPro
 
     onResult(container, null);
     setScanState('done');
-  }, [onResult, stopStream]);
+  }, [user, onResult, stopStream]);
 
   const tickScan = useCallback(() => {
     const video = videoRef.current;

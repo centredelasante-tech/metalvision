@@ -36,22 +36,6 @@ interface Organization {
   name: string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Bug mineur relevé au test live du 12 juillet (ADR-MVP.md §9octies) : `e instanceof Error`
-// est faux pour une PostgrestError (objet simple avec .message/.code/.details, pas une
-// instance d'Error) — le message réel de Postgres/PostgREST était donc toujours masqué
-// par un texte générique. Cette fonction couvre les deux formes d'erreur rencontrées ici.
-function getErrorMessage(e: unknown, fallback: string): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
-    return (e as { message: string }).message;
-  }
-  return fallback;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<DocStatus, { label: string; cls: string; icon: string }> = {
@@ -147,7 +131,6 @@ function DocumentUploader({ myAdminOrgIds, organizations, actorId, onClose, onUp
 
     if (!form.owner_org_id) { setError('Sélectionnez l\'organisation propriétaire'); return; }
     if (!form.object_id.trim()) { setError('L\'identifiant de l\'objet rattaché est obligatoire'); return; }
-    if (!UUID_RE.test(form.object_id.trim())) { setError('L\'identifiant de l\'objet doit être un UUID valide (ex. 3fa85f64-5717-4562-b3fc-2c963f66afa6)'); return; }
     if (!form.title.trim()) { setError('Le titre est obligatoire'); return; }
     if (!file) { setError('Sélectionnez un fichier à déposer'); return; }
 
@@ -186,7 +169,7 @@ function DocumentUploader({ myAdminOrgIds, organizations, actorId, onClose, onUp
 
       onUploaded();
     } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Erreur lors du dépôt'));
+      setError(e instanceof Error ? e.message : 'Erreur lors du dépôt');
     } finally {
       setUploading(false);
     }
@@ -244,9 +227,7 @@ function DocumentUploader({ myAdminOrgIds, organizations, actorId, onClose, onUp
                 type="text"
                 value={form.object_id}
                 onChange={(e) => setForm((p) => ({ ...p, object_id: e.target.value }))}
-                placeholder="UUID de l'objet (ex. 3fa85f64-5717-4562-b3fc-2c963f66afa6)"
-                pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-                title="Doit être un UUID valide"
+                placeholder="UUID de l'objet"
                 className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                 required
               />
@@ -457,7 +438,7 @@ export default function DocumentsPage() {
       setOrganizations(orgsData ?? []);
 
     } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Erreur de chargement'));
+      setError(e instanceof Error ? e.message : 'Erreur de chargement');
     } finally {
       setLoading(false);
     }
@@ -497,7 +478,7 @@ export default function DocumentsPage() {
       await loadData();
       setSelectedDoc(null);
     } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Erreur lors de la soumission'));
+      setError(e instanceof Error ? e.message : 'Erreur lors de la soumission');
     } finally {
       setActionLoading(null);
     }
@@ -521,7 +502,8 @@ export default function DocumentsPage() {
       await loadData();
       setSelectedDoc(null);
     } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Erreur lors de la décision'));
+      const msg = e instanceof Error ? e.message : 'Erreur lors de la décision';
+      setError(msg);
     } finally {
       setActionLoading(null);
     }
@@ -554,7 +536,7 @@ export default function DocumentsPage() {
       await loadData();
       setSelectedDoc(null);
     } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Erreur lors de l\'archivage'));
+      setError(e instanceof Error ? e.message : 'Erreur lors de l\'archivage');
     } finally {
       setActionLoading(null);
     }
@@ -880,7 +862,7 @@ function DownloadButton({ doc }: { doc: Document }) {
       if (error) throw error;
       window.open(data.signedUrl, '_blank');
     } catch (e: unknown) {
-      alert(getErrorMessage(e, 'Erreur lors du téléchargement'));
+      alert(e instanceof Error ? e.message : 'Erreur lors du téléchargement');
     } finally {
       setLoading(false);
     }

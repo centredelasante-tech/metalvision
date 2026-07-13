@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Icon from '@/components/ui/AppIcon';
 import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { LotDraft, SelectedContainer } from './NewLotWizard';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export default function StepContainer({ draft, updateDraft, onNext }: Props) {
+  const { user } = useAuth();
   const searchParams = useSearchParams();
   const containerId = searchParams.get('container_id');
 
