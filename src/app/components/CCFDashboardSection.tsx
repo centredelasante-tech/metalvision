@@ -2,7 +2,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
 import MetricCard from '@/components/ui/MetricCard';
 import { EventTypeBadge } from '@/components/ObjectTimeline';
 import type { BusinessEvent } from '@/components/ObjectTimeline';
@@ -97,8 +96,6 @@ function SectionHeader({ title, icon, href, linkLabel }: { title: string; icon: 
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function CCFDashboardSection() {
-  const { user } = useAuth();
-
   // KPI counts
   const [activeProjectsCount, setActiveProjectsCount] = useState<number | null>(null);
   const [pendingDocsCount, setPendingDocsCount] = useState<number | null>(null);
@@ -114,146 +111,160 @@ export default function CCFDashboardSection() {
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
-    if (!user) return;
     setLoading(true);
-    const supabase = createClient();
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const fourteenDaysFromNow = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
 
-    // ── KPI: active projects count ──
-    const { count: projCount } = await supabase
-      .from('ccf_projects')
-      .select('*', { count: 'exact', head: true })
-      .neq('phase', 'closed');
-    setActiveProjectsCount(projCount ?? 0);
+      const now = new Date();
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const fourteenDaysFromNow = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
-    // ── KPI: pending documents count ──
-    const { count: docCount } = await supabase
-      .from('documents')
-      .select('*', { count: 'exact', head: true })
-      .in('status', ['draft', 'submitted']);
-    setPendingDocsCount(docCount ?? 0);
+      // ── KPI: active projects count ──
+      const { count: projCount } = await supabase
+        .from('ccf_projects')
+        .select('*', { count: 'exact', head: true })
+        .neq('phase', 'closed');
+      setActiveProjectsCount(projCount ?? 0);
 
-    // ── KPI: pending mandates count ──
-    const { count: mandateCount } = await supabase
-      .from('mandates')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'pending_acceptance');
-    setPendingMandatesCount(mandateCount ?? 0);
+      // ── KPI: pending documents count ──
+      const { count: docCount } = await supabase
+        .from('documents')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['draft', 'submitted']);
+      setPendingDocsCount(docCount ?? 0);
 
-    // ── KPI: events last 7 days ──
-    const { count: evtCount } = await supabase
-      .from('business_events')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', sevenDaysAgo);
-    setRecentEventsCount(evtCount ?? 0);
+      // ── KPI: pending mandates count ──
+      const { count: mandateCount } = await supabase
+        .from('mandates')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending_acceptance');
+      setPendingMandatesCount(mandateCount ?? 0);
 
-    // ── Active projects list (sorted by target_end_date) ──
-    const { data: projList } = await supabase
-      .from('ccf_projects')
-      .select('id, phase, target_end_date, opportunity_id')
-      .neq('phase', 'closed')
-      .order('target_end_date', { ascending: true, nullsFirst: false });
-    setActiveProjects(projList ?? []);
+      // ── KPI: events last 7 days ──
+      const { count: evtCount } = await supabase
+        .from('business_events')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', sevenDaysAgo);
+      setRecentEventsCount(evtCount ?? 0);
 
-    // ── Incomplete documents list ──
-    const { data: docList } = await supabase
-      .from('documents')
-      .select('id, title, status, created_at, object_type, object_id')
-      .in('status', ['draft', 'submitted'])
-      .order('created_at', { ascending: false })
-      .limit(10);
-    setIncompleteDocs(docList ?? []);
+      // ── Active projects list (sorted by target_end_date) ──
+      const { data: projList } = await supabase
+        .from('ccf_projects')
+        .select('id, phase, target_end_date, opportunity_id')
+        .neq('phase', 'closed')
+        .order('target_end_date', { ascending: true, nullsFirst: false });
+      setActiveProjects(projList ?? []);
 
-    // ── Recent events list (all objects, RLS-filtered) ──
-    const { data: evtList } = await supabase
-      .from('business_events')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(10);
-    setRecentEvents(evtList ?? []);
+      // ── Incomplete documents list ──
+      const { data: docList } = await supabase
+        .from('documents')
+        .select('id, title, status, created_at, object_type, object_id')
+        .in('status', ['draft', 'submitted'])
+        .order('created_at', { ascending: false })
+        .limit(10);
+      setIncompleteDocs(docList ?? []);
 
-    // ── Alerts ──
-    const alertItems: AlertItem[] = [];
+      // ── Recent events list (all objects, RLS-filtered) ──
+      const { data: evtList } = await supabase
+        .from('business_events')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      setRecentEvents(evtList ?? []);
 
-    // 1. Blocked logistics steps (across all visible projects)
-    const { data: blockedSteps } = await supabase
-      .from('logistics_steps')
-      .select('id, status, project_id')
-      .eq('status', 'blocked');
-    if (blockedSteps && blockedSteps.length > 0) {
-      const uniqueProjects = [...new Set((blockedSteps as LogisticsStep[]).map((s) => s.project_id))];
-      uniqueProjects.forEach((projectId) => {
-        const count = (blockedSteps as LogisticsStep[]).filter((s) => s.project_id === projectId).length;
-        alertItems.push({
-          id: `blocked-${projectId}`,
-          label: `${count} étape${count > 1 ? 's' : ''} logistique${count > 1 ? 's' : ''} bloquée${count > 1 ? 's' : ''} sur ce projet`,
-          severity: 'high',
-          href: `/projets/${projectId}`,
-          icon: 'ExclamationTriangleIcon',
+      // ── Alerts ──
+      const alertItems: AlertItem[] = [];
+
+      // 1. Blocked logistics steps (across all visible projects)
+      const { data: blockedSteps } = await supabase
+        .from('logistics_steps')
+        .select('id, status, project_id')
+        .eq('status', 'blocked');
+      if (blockedSteps && blockedSteps.length > 0) {
+        const uniqueProjects = [...new Set((blockedSteps as LogisticsStep[]).map((s) => s.project_id))];
+        uniqueProjects.forEach((projectId) => {
+          const count = (blockedSteps as LogisticsStep[]).filter((s) => s.project_id === projectId).length;
+          alertItems.push({
+            id: `blocked-${projectId}`,
+            label: `${count} étape${count > 1 ? 's' : ''} logistique${count > 1 ? 's' : ''} bloquée${count > 1 ? 's' : ''} sur ce projet`,
+            severity: 'high',
+            href: `/projets/${projectId}`,
+            icon: 'ExclamationTriangleIcon',
+          });
         });
-      });
-    }
+      }
 
-    // 2. Overdue projects (target_end_date passed, phase != closed)
-    const { data: overdueProjects } = await supabase
-      .from('ccf_projects')
-      .select('id, target_end_date, phase')
-      .neq('phase', 'closed')
-      .lt('target_end_date', now.toISOString())
-      .not('target_end_date', 'is', null);
-    if (overdueProjects && overdueProjects.length > 0) {
-      (overdueProjects as CcfProject[]).forEach((p) => {
-        alertItems.push({
-          id: `overdue-${p.id}`,
-          label: `Projet en retard — date cible dépassée (${formatDateShort(p.target_end_date!)})`,
-          severity: 'high',
-          href: `/projets/${p.id}`,
-          icon: 'ClockIcon',
+      // 2. Overdue projects (target_end_date passed, phase != closed)
+      const { data: overdueProjects } = await supabase
+        .from('ccf_projects')
+        .select('id, target_end_date, phase')
+        .neq('phase', 'closed')
+        .lt('target_end_date', now.toISOString())
+        .not('target_end_date', 'is', null);
+      if (overdueProjects && overdueProjects.length > 0) {
+        (overdueProjects as CcfProject[]).forEach((p) => {
+          alertItems.push({
+            id: `overdue-${p.id}`,
+            label: `Projet en retard — date cible dépassée (${formatDateShort(p.target_end_date!)})`,
+            severity: 'high',
+            href: `/projets/${p.id}`,
+            icon: 'ClockIcon',
+          });
         });
-      });
-    }
+      }
 
-    // 3. Rejected documents last 7 days
-    const { data: rejectedDocs } = await supabase
-      .from('documents')
-      .select('id, title')
-      .eq('status', 'rejected')
-      .gte('updated_at', sevenDaysAgo);
-    if (rejectedDocs && rejectedDocs.length > 0) {
-      alertItems.push({
-        id: 'rejected-docs',
-        label: `${rejectedDocs.length} document${rejectedDocs.length > 1 ? 's' : ''} refusé${rejectedDocs.length > 1 ? 's' : ''} ces 7 derniers jours`,
-        severity: 'medium',
-        href: '/documents',
-        icon: 'DocumentMinusIcon',
-      });
-    }
-
-    // 4. Active mandates expiring within 14 days
-    const { data: expiringMandates } = await supabase
-      .from('mandates')
-      .select('id, end_date, status')
-      .eq('status', 'active')
-      .not('end_date', 'is', null)
-      .lte('end_date', fourteenDaysFromNow)
-      .gte('end_date', now.toISOString());
-    if (expiringMandates && expiringMandates.length > 0) {
-      (expiringMandates as Mandate[]).forEach((m) => {
+      // 3. Rejected documents last 7 days
+      const { data: rejectedDocs } = await supabase
+        .from('documents')
+        .select('id, title')
+        .eq('status', 'rejected')
+        .gte('updated_at', sevenDaysAgo);
+      if (rejectedDocs && rejectedDocs.length > 0) {
         alertItems.push({
-          id: `expiring-mandate-${m.id}`,
-          label: `Mandat actif expirant le ${formatDateShort(m.end_date!)} (dans moins de 14 jours)`,
+          id: 'rejected-docs',
+          label: `${rejectedDocs.length} document${rejectedDocs.length > 1 ? 's' : ''} refusé${rejectedDocs.length > 1 ? 's' : ''} ces 7 derniers jours`,
           severity: 'medium',
-          href: '/mandats',
-          icon: 'ExclamationCircleIcon',
+          href: '/documents',
+          icon: 'DocumentMinusIcon',
         });
-      });
-    }
+      }
 
-    setAlerts(alertItems);
-    setLoading(false);
-  }, [user]);
+      // 4. Active mandates expiring within 14 days
+      const { data: expiringMandates } = await supabase
+        .from('mandates')
+        .select('id, end_date, status')
+        .eq('status', 'active')
+        .not('end_date', 'is', null)
+        .lte('end_date', fourteenDaysFromNow)
+        .gte('end_date', now.toISOString());
+      if (expiringMandates && expiringMandates.length > 0) {
+        (expiringMandates as Mandate[]).forEach((m) => {
+          alertItems.push({
+            id: `expiring-mandate-${m.id}`,
+            label: `Mandat actif expirant le ${formatDateShort(m.end_date!)} (dans moins de 14 jours)`,
+            severity: 'medium',
+            href: '/mandats',
+            icon: 'ExclamationCircleIcon',
+          });
+        });
+      }
+
+      setAlerts(alertItems);
+    } catch (err) {
+      // Ne jamais laisser une erreur non gérée bloquer indéfiniment l'état de
+      // chargement — voir INC-S01-01 (ADR-MVP.md) : l'absence de try/catch/finally
+      // ici, combinée à un bug distinct (useAuth() jamais fourni par un
+      // AuthProvider monté), laissait cette section bloquée sur "…" en
+      // permanence, sans aucune requête réseau ni erreur visible en console.
+      console.error('CCFDashboardSection: échec du chargement', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchAll();

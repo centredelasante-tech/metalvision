@@ -6,10 +6,8 @@ import RecentLotsTable from './RecentLotsTable';
 import ClientQuickActions from './ClientQuickActions';
 import CCFDashboardSection from './CCFDashboardSection';
 import { createClient } from '@/lib/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
 
 export default function ClientDashboardContent() {
-  const { user } = useAuth();
   const [companyName, setCompanyName] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<string>('');
 
@@ -29,19 +27,27 @@ export default function ClientDashboardContent() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    // Note (INC-S01-01) : `useAuth()` n'est fourni par aucun `AuthProvider`
+    // monté dans l'arbre — `user` y est toujours `undefined`. Utilisation
+    // directe de `supabase.auth.getUser()`, comme dans Sidebar.tsx.
+    // Table/colonnes également corrigées : `company_members`/`companies`
+    // ont été renommées `organization_members`/`organizations` lors du
+    // rebuild CCF (MVP-DA-012) — l'ancien nom n'existe plus (PGRST205).
     const supabase = createClient();
-    supabase
-      .from('company_members')
-      .select('companies(name)')
-      .eq('user_id', user.id)
-      .limit(1)
-      .single()
-      .then(({ data }) => {
-        const name = (data?.companies as { name: string } | null)?.name ?? null;
-        setCompanyName(name);
-      });
-  }, [user]);
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      supabase
+        .from('organization_members')
+        .select('organizations(name)')
+        .eq('user_id', user.id)
+        .limit(1)
+        .single()
+        .then(({ data }) => {
+          const name = (data?.organizations as { name: string } | null)?.name ?? null;
+          setCompanyName(name);
+        });
+    });
+  }, []);
 
   const subtitle = companyName
     ? `${companyName} · Dernière mise à jour ${lastUpdate}`
