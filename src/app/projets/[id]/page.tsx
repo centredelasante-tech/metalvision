@@ -6,6 +6,7 @@ import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
 import ObjectTimeline from '@/components/ObjectTimeline';
 import { computeProjectRisks } from '@/lib/projectRisks';
+import { getErrorMessage } from '@/lib/getErrorMessage';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -608,7 +609,7 @@ function ProjectDocumentUploader({ projectId, myAdminOrgIds, organizations, acto
 
       onUploaded();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors du dépôt');
+      setError(getErrorMessage(e, 'Erreur lors du dépôt'));
     } finally {
       setUploading(false);
     }
@@ -786,7 +787,7 @@ function LogisticsStepCard({ step, canEdit, actorId, coordinatorOrgId, onUpdated
       setEditing(false);
       onUpdated();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de la mise à jour');
+      setError(getErrorMessage(e, 'Erreur lors de la mise à jour'));
     } finally {
       setSaving(false);
     }
@@ -1174,7 +1175,7 @@ export default function ProjetDetailPage() {
       setOrganizations(orgsData ?? []);
 
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur de chargement');
+      setError(getErrorMessage(e, 'Erreur de chargement'));
     } finally {
       setLoading(false);
     }
@@ -1228,7 +1229,7 @@ export default function ProjetDetailPage() {
       setEditingPhase(false);
       await loadData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de la mise à jour');
+      setError(getErrorMessage(e, 'Erreur lors de la mise à jour'));
     } finally {
       setPhaseLoading(false);
     }
@@ -1248,7 +1249,7 @@ export default function ProjetDetailPage() {
       // DO NOT insert business_event manually — the RPC already does it server-side
       await loadData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de l\'acceptation');
+      setError(getErrorMessage(e, 'Erreur lors de l\'acceptation'));
     } finally {
       setActionLoading(null);
     }
@@ -1265,7 +1266,7 @@ export default function ProjetDetailPage() {
       // DO NOT insert business_event manually — the RPC already does it server-side
       await loadData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors du refus');
+      setError(getErrorMessage(e, 'Erreur lors du refus'));
     } finally {
       setActionLoading(null);
     }
@@ -1321,7 +1322,7 @@ export default function ProjetDetailPage() {
       setVrForm({ volume: '', coordination_value: '', notes: '', status: 'draft' });
       await loadData();
     } catch (e: unknown) {
-      setVrError(e instanceof Error ? e.message : 'Erreur lors de l\'enregistrement');
+      setVrError(getErrorMessage(e, 'Erreur lors de l\'enregistrement'));
     } finally {
       setVrLoading(false);
     }

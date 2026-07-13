@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
+import { getErrorMessage } from '@/lib/getErrorMessage';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,17 +41,9 @@ interface Organization {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Bug mineur relevé au test live du 12 juillet (ADR-MVP.md §9octies) : `e instanceof Error`
-// est faux pour une PostgrestError (objet simple avec .message/.code/.details, pas une
-// instance d'Error) — le message réel de Postgres/PostgREST était donc toujours masqué
-// par un texte générique. Cette fonction couvre les deux formes d'erreur rencontrées ici.
-function getErrorMessage(e: unknown, fallback: string): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
-    return (e as { message: string }).message;
-  }
-  return fallback;
-}
+// getErrorMessage extrait dans src/lib/getErrorMessage.ts (stabilisation du 13 juillet
+// 2026) — même correctif que celui trouvé ici au test live du 12 juillet (§9octies),
+// désormais partagé pour éviter la même régression sur les autres écrans.
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

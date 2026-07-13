@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
 import { computeProjectRisks, RiskItem } from '@/lib/projectRisks';
+import { getErrorMessage } from '@/lib/getErrorMessage';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -219,7 +220,7 @@ export default function CockpitPage() {
       if (projErr) throw projErr;
       setCoordinatorProjects((projects ?? []) as CcfProject[]);
     } catch (e: unknown) {
-      setErrorProjects(e instanceof Error ? e.message : 'Erreur de chargement');
+      setErrorProjects(getErrorMessage(e, 'Erreur de chargement'));
     } finally {
       setLoadingProjects(false);
     }
@@ -275,7 +276,7 @@ export default function CockpitPage() {
       setLatestReport(vrData as ValueReport | null);
 
     } catch (e: unknown) {
-      setErrorDetail(e instanceof Error ? e.message : 'Erreur de chargement du projet');
+      setErrorDetail(getErrorMessage(e, 'Erreur de chargement du projet'));
     } finally {
       setLoadingDetail(false);
     }

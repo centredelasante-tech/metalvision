@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
+import { getErrorMessage } from '@/lib/getErrorMessage';
 
 type ProjectPhase = 'draft' | 'active' | 'execution' | 'review' | 'closed';
 type ProjectStatus = 'draft' | 'active' | 'paused' | 'closed' | 'archived';
@@ -51,7 +52,7 @@ export default function ProjetsPage() {
       if (err) throw err;
       setProjects((data ?? []) as CcfProject[]);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur de chargement');
+      setError(getErrorMessage(e, 'Erreur de chargement'));
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
+import { getErrorMessage } from '@/lib/getErrorMessage';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -245,7 +246,7 @@ export default function MandatsPage() {
       setMandateActions(actionsData ?? []);
 
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur de chargement');
+      setError(getErrorMessage(e, 'Erreur de chargement'));
     } finally {
       setLoading(false);
     }
@@ -293,7 +294,7 @@ export default function MandatsPage() {
       await loadData();
       setSelectedMandate(null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de l\'envoi');
+      setError(getErrorMessage(e, 'Erreur lors de l\'envoi'));
     } finally {
       setActionLoading(null);
     }
@@ -323,7 +324,7 @@ export default function MandatsPage() {
       await loadData();
       setSelectedMandate(null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de l\'acceptation');
+      setError(getErrorMessage(e, 'Erreur lors de l\'acceptation'));
     } finally {
       setActionLoading(null);
     }
@@ -347,7 +348,7 @@ export default function MandatsPage() {
       await loadData();
       setSelectedMandate(null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors du refus');
+      setError(getErrorMessage(e, 'Erreur lors du refus'));
     } finally {
       setActionLoading(null);
     }
@@ -376,7 +377,7 @@ export default function MandatsPage() {
       await loadData();
       setSelectedMandate(null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur lors de la révocation');
+      setError(getErrorMessage(e, 'Erreur lors de la révocation'));
     } finally {
       setActionLoading(null);
     }
@@ -410,7 +411,7 @@ export default function MandatsPage() {
       setForm({ receiver_org_id: '', mandate_scope: 'operationnel', actions: [], start_date: '', end_date: '', issuer_org_id: '' });
       await loadData();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Erreur lors de la création';
+      const msg = getErrorMessage(e, 'Erreur lors de la création');
       // Surface readable error instead of raw SQL
       if (msg.includes('mandate_actions') || msg.includes('permissions')) {
         setFormError('Actions invalides — utilisez uniquement les actions du catalogue autorisé');
