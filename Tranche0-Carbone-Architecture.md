@@ -1,318 +1,221 @@
-# Tranche 0 — Architecture du chantier carbone (v2)
+# Tranche 0 — Architecture du chantier carbone (v3)
 
-**Statut : proposition de conception révisée. Aucun code, aucune migration réelle exécutée — l'écriture des migrations reste explicitement non validée par l'utilisateur.** Version 2, intégrant 12 corrections demandées après revue de la v1. Rédigé après le gel de la version démo CCF (`ADR-MVP.md` §9septricies, commit `366caec`/`a081433`).
-
-**Principe directeur ajouté dans cette révision, appliqué de façon cohérente aux points 1 et 2 :** partout où une relation évolue dans le temps (adhésion à un regroupement, rattachement à un projet MRV), le MVP utilise une **table d'association historisée avec un index unique partiel garantissant au plus une ligne active à la fois**, plutôt qu'une colonne FK nue. Ce patron unique évite d'avoir à choisir entre « historique perdu » et « modèle complexe dès le départ ».
+**Statut : proposition de conception révisée, dernière passe avant validation comme architecture cible.** Aucune migration exécutée. Version 3, intégrant les 4 derniers blocages non négociables identifiés après revue de la v2 : séparation émission/commercial, correction du modèle financier et du versionnement, précision des invariants de vérification/unités/périodes, durcissement de la frontière de sécurité des RPC.
 
 ---
 
-## 1. Le modèle d'adhésion aux regroupements
+## 0. Convention d'unités (nouvelle section, requise par le point 3)
 
-**Correction demandée : remplacer `organizations.aggregator_id` par une table historisée, une seule adhésion active à la fois.**
-
-**Décision : remplacer, pas compléter.** `organizations.aggregator_id` a 0 ligne renseignée en production (confirmé §9tertricies) — aucune donnée à migrer, un remplacement complet est sans risque. Garder les deux (colonne + table) créerait une dénormalisation à synchroniser sans bénéfice réel à l'échelle de données attendue pour ce MVP.
-
-**Table cible :**
-```
-aggregator_memberships
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE
-  aggregator_id   UUID NOT NULL REFERENCES aggregators(id) ON DELETE CASCADE
-  started_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-  ended_at        TIMESTAMPTZ NULL
-  ended_reason    TEXT NULL
-  created_by      UUID REFERENCES profiles(id)
-  ended_by        UUID REFERENCES profiles(id)
-```
-**Invariant garanti par la base** : `UNIQUE INDEX idx_one_active_membership ON aggregator_memberships (organization_id) WHERE ended_at IS NULL` — une seule adhésion active par organisation, l'historique complet reste consultable.
-
-**Écriture réservée à une RPC** (voir §11) — pas d'`INSERT`/`UPDATE` direct autorisé par RLS, pour garantir que « quitter » un regroupement (renseigner `ended_at`) et « rejoindre » le suivant se fasse de façon atomique et traçable plutôt que par une écriture applicative libre.
+**Toute colonne suffixée `_tco2e` dans ce document est en tonnes métriques de CO2 équivalent.** Point de vigilance explicite : `project_activity_logs` (domaine MRV existant) exprime ses colonnes en **kilogrammes** (`ghg_emissions_baseline_kgco2e`, `ghg_emissions_project_kgco2e`, `ghg_reduction_kgco2e`) — un facteur **÷ 1000** est obligatoire à toute frontière où une donnée de `project_activity_logs` alimente une colonne `_tco2e` (ex. si `verified_reduction_tco2e` est un jour pré-rempli automatiquement à partir d'une somme d'`activity_logs`, §4 v1). Aucune conversion automatique n'est proposée dans cette tranche — la saisie de `verified_reduction_tco2e` reste manuelle (décision v1 §4), donc le risque de confusion d'unité est aujourd'hui un risque humain (vérificateur) plutôt qu'un risque de calcul, mais il doit être documenté explicitement dans l'écran de saisie (Tranche 4) : afficher la somme brute en kg à titre indicatif, jamais comme une valeur pré-remplie silencieuse en tCO2e sans conversion visible.
 
 ---
 
-## 2. La relation entre `ccf_projects` et les projets MRV
+## 1. Séparer l'émission réglementaire du cycle commercial
 
-**Correction demandée : réévaluer le lien 1-1 face aux périodes/cycles MRV successifs.**
+**Problème identifié dans la v2** : `credit_lots` portait à la fois des données d'**émission officielle** (immuables par nature : quantité certifiée, registre externe, numéros de série, date d'émission) et un **statut commercial mutable** (`available/reserved/sold/retired/voided`). Mélanger un fait réglementaire figé et un cycle de vie commercial changeant sur la même ligne empêche de représenter un cas pourtant réaliste : une émission officielle unique subdivisée en **plusieurs lots commerciaux** vendus séparément (pratique courante des registres volontaires — un lot certifié peut être fractionné en unités plus petites pour la vente).
 
-**Constat qui invalide le choix initial** : `verification_sessions.project_id` autorise déjà plusieurs sessions par projet MRV (aucune contrainte d'unicité) — un projet MRV existant peut donc traverser plusieurs cycles de vérification dans le temps. Un simple `ccf_projects.mrv_project_id` figerait le lien à un instant donné sans capacité de représenter un changement de projet MRV associé (ex. re-scoping après un changement majeur de périmètre) ni son historique.
+**Décision : deux tables distinctes.**
 
-**Décision : table d'association historisée `ccf_mrv_project_links`, pas une colonne FK nue.**
 ```
-ccf_mrv_project_links
+credit_issuances                              -- l'émission réglementaire (immuable)
+  id                            UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  verification_session_id      UUID NOT NULL REFERENCES verification_sessions(id) ON DELETE RESTRICT
+  issued_quantity_tco2e         NUMERIC(14,4) NOT NULL CHECK (issued_quantity_tco2e > 0)
+  vintage_year                  INT NOT NULL
+  registry_program              TEXT NULL
+  external_registry_id          TEXT NULL
+  external_serial_number_start  TEXT NULL
+  external_serial_number_end    TEXT NULL
+  issuance_date                 DATE NULL
+  issued_by                     UUID REFERENCES profiles(id)
+  is_voided                     BOOLEAN NOT NULL DEFAULT false
+  voided_at                     TIMESTAMPTZ NULL
+  voided_reason                 TEXT NULL
+  created_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+**Immuable par trigger** : toute colonne autre que `is_voided`/`voided_at`/`voided_reason` est rejetée en `UPDATE` — une émission ne se corrige jamais, elle se remplace (nouvelle ligne) ou s'annule (`is_voided`).
+
+`credit_lot_sources` (v2 §7) est renommée `credit_issuance_sources` et rattachée à `credit_issuances` — la contribution de chaque organisation est un fait lié à la certification, pas à la subdivision commerciale ultérieure. Invariant inchangé (trigger) : `SUM(contributed_tco2e) = issued_quantity_tco2e`.
+
+```
+credit_lots                                   -- la subdivision commerciale (mutable)
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  credit_issuance_id  UUID NOT NULL REFERENCES credit_issuances(id) ON DELETE RESTRICT
+  quantity_tco2e      NUMERIC(14,4) NOT NULL CHECK (quantity_tco2e > 0)
+  status              TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','reserved','sold','retired','voided'))
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+
+**Deux niveaux de contrôle anti-surémission, plus fins qu'en v2 (qui n'en avait qu'un) :**
+- **Niveau session → émission** : `SUM(issued_quantity_tco2e) FILTER (WHERE NOT is_voided) <= verification_sessions.eligible_tco2e` par `verification_session_id`.
+- **Niveau émission → lots** : `SUM(quantity_tco2e) FILTER (WHERE status != 'voided') <= credit_issuances.issued_quantity_tco2e` par `credit_issuance_id`.
+
+**Deux RPC distinctes (séparation aussi au niveau des responsabilités d'autorisation, voir §4) :**
+- `create_credit_issuance(...)` — acte réglementaire, réservé au vérificateur de la session.
+- `issue_credit_lot(...)` — acte commercial de subdivision, réservé à l'admin du regroupement propriétaire.
+- `void_credit_issuance(p_credit_issuance_id, p_reason)` — n'est permise que si **aucun** lot enfant n'a le statut `sold`/`retired` (sinon la procédure de réversion de vente, toujours hors périmètre, doit être suivie en premier) — condition vérifiée par la RPC, pas par une contrainte déclarative (c'est une règle de workflow, pas une contrainte d'intégrité pure).
+
+---
+
+## 2. Correction du modèle financier et du versionnement des règles
+
+### 2a. Modèle financier — erreur technique corrigée
+
+**Erreur trouvée dans la v2** : `net_distributable_amount` était proposée comme colonne `GENERATED ALWAYS AS (...) STORED`, mais si `gross_amount` avait dû dépendre d'une agrégation de `credit_sale_lots` (table liée), ce ne serait **pas possible** — Postgres n'autorise une colonne générée qu'à partir de colonnes de la **même ligne**, jamais d'une agrégation inter-tables.
+
+**Décision — prix unique par vente (limitation MVP assumée, pas cachée)** : `credit_sales.total_tco2e` et `price_per_tco2e` restent des champs saisis directement (pas de prix différencié par lot pour ce MVP — limitation explicite, à lever plus tard si un besoin de tarification par lot apparaît). Cela permet à `gross_amount` de rester une colonne générée légitime, car dépendant uniquement de colonnes de la même ligne :
+```
+credit_sales
+  total_tco2e             NUMERIC(14,4) NOT NULL
+  price_per_tco2e         NUMERIC(14,2) NOT NULL
+  gross_amount            NUMERIC(14,2) GENERATED ALWAYS AS (total_tco2e * price_per_tco2e) STORED
+  platform_fee_pct        NUMERIC(5,4) NOT NULL DEFAULT 0
+  platform_fee_amount     NUMERIC(14,2) GENERATED ALWAYS AS (ROUND(total_tco2e * price_per_tco2e * platform_fee_pct, 2)) STORED
+  net_distributable_amount NUMERIC(14,2) GENERATED ALWAYS AS (ROUND(total_tco2e * price_per_tco2e * (1 - platform_fee_pct), 2)) STORED
+  currency                TEXT NOT NULL DEFAULT 'CAD'
+```
+`platform_fee_amount` n'est plus un champ saisi séparément (source d'incohérence en v2 si `pct` et `amount` divergeaient) — **`platform_fee_pct` est l'unique source de vérité**, le montant est toujours dérivé.
+
+**Invariant de cohérence quantité/lots, désormais explicitement en trigger (pas en colonne générée, puisqu'il agrège `credit_sale_lots`)** : `SUM(credit_sale_lots.quantity_tco2e) = credit_sales.total_tco2e` pour une vente donnée — vérifié à la porte `finalize_credit_sale_allocations()` (v2 §11), pas à chaque `INSERT` individuel sur `credit_sale_lots` (pour ne pas rejeter un panier de vente en cours de constitution).
+
+### 2b. Versionnement des règles — mécanisme corrigé
+
+**Erreur de conception trouvée en v2** : un compteur `rule_version INT` sur une ligne par ailleurs modifiable par `UPDATE` ne préserve **aucun historique réel** — incrémenter le compteur sans empêcher la modification des `parameters` JSONB en place ferait perdre la trace exacte de ce qui a été appliqué à une allocation passée. Un numéro de version qui pointe vers des paramètres qui ont changé sous ses pieds n'est pas un audit trail, c'est une illusion d'audit trail.
+
+**Décision : `distribution_rules` devient une table strictement append-only**, sur le même patron que `aggregator_memberships`/`ccf_mrv_project_links` (déjà établi en v2) :
+```
+distribution_rules
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  ccf_project_id UUID NOT NULL REFERENCES ccf_projects(id) ON DELETE CASCADE
-  mrv_project_id UUID NOT NULL REFERENCES projects(id) ON DELETE RESTRICT
-  period_start   DATE NOT NULL DEFAULT CURRENT_DATE
-  period_end     DATE NULL
-  created_by     UUID REFERENCES profiles(id)
+  aggregator_id  UUID NOT NULL REFERENCES aggregators(id) ON DELETE CASCADE
+  rule_type      TEXT NOT NULL CHECK (rule_type IN ('proportional','equal','custom'))
+  parameters     JSONB
+  effective_from DATE NOT NULL DEFAULT CURRENT_DATE
+  effective_to   DATE NULL
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
-**Cardinalité tranchée explicitement pour le MVP : 1 actif — 1 actif.** Deux index uniques partiels :
-- `UNIQUE (ccf_project_id) WHERE period_end IS NULL` — un projet CCF n'a qu'un seul projet MRV actif à la fois (mais peut en changer dans le temps, historique conservé).
-- `UNIQUE (mrv_project_id) WHERE period_end IS NULL` — symétriquement, un projet MRV n'est activement rattaché qu'à un seul projet CCF à la fois.
+- **Immuable après création** (trigger `BEFORE UPDATE` n'autorisant que la fermeture de `effective_to`, rien d'autre) — pour « changer la règle », on **insère une nouvelle ligne** et on ferme l'ancienne (`effective_to = CURRENT_DATE`), jamais un `UPDATE` des `parameters` en place.
+- `UNIQUE (aggregator_id) WHERE effective_to IS NULL` — une seule règle active à la fois (même patron d'index unique partiel que partout ailleurs dans ce document).
+- **`rule_version` supprimée** — redondante une fois les lignes immuables : `credit_sale_allocations.distribution_rule_id` référence directement l'`id` de la ligne exacte utilisée, qui ne changera plus jamais. Pas besoin d'un numéro de version parallèle à maintenir en cohérence.
 
-**Ce qui est délibérément exclu du MVP, à trancher plus tard si le besoin se matérialise** : un projet MRV agrégeant la mesure de plusieurs projets CCF simultanément (scénario plausible si un regroupement veut mesurer les émissions au niveau du regroupement plutôt que projet par projet) — cette extension casserait la deuxième contrainte d'unicité ci-dessus ; elle est explicitement hors périmètre de cette tranche, pas oubliée par erreur.
+**Statuts d'approbation/paiement** (v2 §10) inchangés dans leur principe : `credit_sale_allocations.status IN ('pending','approved','paid','disputed','cancelled')`.
 
 ---
 
-## 3. `NUMERIC` plutôt que `FLOAT8` pour les quantités carbone officielles
+## 3. Précision des invariants de vérification, unités et périodes
 
-**Décision : appliquée à toutes les colonnes de quantité tCO2e et, par cohérence du même principe, aux montants financiers associés** (`FLOAT8` introduit une imprécision d'arrondi binaire inacceptable pour des quantités qui deviennent la base d'un crédit vendu et audité) :
+**Unités** : traitées en §0 ci-dessus.
 
-| Colonne | Type révisé |
+**Invariant manquant en v2, corrigé** : `verification_sessions` reçoit `CHECK (eligible_tco2e <= verified_reduction_tco2e)` — la v2 mentionnait cette relation en prose (« un facteur de décote peut être appliqué ») sans jamais l'exprimer comme une contrainte réelle. Corrigé.
+
+**Périodes — angle mort réel de la v1 et de la v2, maintenant corrigé** : `verification_sessions` n'avait aucune notion de **période couverte**. Sans ça, deux sessions de vérification pour le **même projet MRV** pourraient couvrir des plages de temps qui se chevauchent, chacune revendiquant une réduction sur les mêmes activités sous-jacentes — un double comptage **interne à un seul projet**, plus insidieux que le double comptage inter-projets déjà discuté en v1 (§6), et non couvert par les contrôles déjà proposés.
+
+**Décision : ajouter les colonnes de période, obligatoires dès la création (pas seulement à la complétion, car le périmètre temporel d'une vérification est connu avant son résultat) :**
+```
+verification_sessions
+  period_start DATE NOT NULL
+  period_end   DATE NOT NULL CHECK (period_end >= period_start)
+```
+
+**Contrainte d'exclusion empêchant le chevauchement, pour les sessions complétées d'un même projet** (nécessite l'extension `btree_gist`) :
+```
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+ALTER TABLE verification_sessions
+  ADD CONSTRAINT no_overlapping_completed_periods
+  EXCLUDE USING gist (
+    project_id WITH =,
+    daterange(period_start, period_end, '[]') WITH &&
+  ) WHERE (status = 'completed');
+```
+Restreinte aux sessions `completed` : deux sessions `planned`/`in_progress` peuvent librement se chevaucher pendant la phase exploratoire (aucun risque tant qu'aucune n'a produit de résultat officiel) — seule la coexistence de deux résultats **officiels** sur des périodes qui se recoupent est structurellement empêchée.
+
+**Ce que cette contrainte ne couvre pas, à garder en tête (déjà noté en v1 §6, toujours vrai)** : le chevauchement de périmètre (`system_boundaries`) entre **deux projets MRV différents** portant sur les mêmes activités physiques reste un risque méthodologique, pas un risque de schéma — hors de portée d'une contrainte SQL, à gérer par la revue humaine du vérificateur.
+
+---
+
+## 4. Frontière de sécurité des RPC et autorisation objet par objet
+
+**Principe explicite, à respecter pour chaque RPC listée ci-dessous** : une fonction `SECURITY DEFINER` contourne entièrement la RLS — toute l'autorisation doit donc être **recalculée explicitement dans le corps de la fonction, pour l'objet précis visé**, jamais déduite d'un simple rôle global (« est vérificateur » ne suffit pas, il faut « est LE vérificateur DE CETTE session »).
+
+**Faille structurelle trouvée en vérifiant ce principe concrètement** : `verification_sessions.verifier_org`/`verifier_contact` sont du **texte libre**, sans FK vers `profiles`/`auth.users` — il est aujourd'hui **impossible** de vérifier objet par objet qu'un utilisateur connecté est bien LE vérificateur assigné à une session précise. Le seul contrôle disponible serait un rôle générique `is_verifier()` (n'importe quel vérificateur, sur n'importe quelle session) — **insuffisant pour l'exigence d'autorisation objet par objet.**
+
+**Décision corrective, nouvelle colonne requise** : `verification_sessions.verifier_user_id UUID NULL REFERENCES profiles(id)` — renseignée quand le vérificateur est un utilisateur de la plateforme (permet l'autorisation objet par objet) ; `verifier_org`/`verifier_contact` restent utiles tels quels pour un vérificateur externe sans compte (auquel cas l'action de complétion devrait être effectuée par un admin de projet pour son compte, avec `actor_id` distinct consigné dans l'événement d'audit — cas explicitement dégradé, pas silencieux).
+
+**Autorisation exacte requise par RPC :**
+
+| RPC | Autorisation objet par objet |
 |---|---|
-| `verification_sessions.verified_reduction_tco2e` | `NUMERIC(14,4)` |
-| `verification_sessions.eligible_tco2e` | `NUMERIC(14,4)` |
-| `credit_lots.quantity_tco2e` | `NUMERIC(14,4)` |
-| `credit_lot_sources.contributed_tco2e` | `NUMERIC(14,4)` |
-| `credit_sale_lots.quantity_tco2e` | `NUMERIC(14,4)` |
-| `credit_sales.total_tco2e` | `NUMERIC(14,4)` |
-| `credit_sale_allocations.allocated_tco2e` | `NUMERIC(14,4)` |
-| `credit_sales.price_per_tco2e`, `gross_amount`, `platform_fee_amount`, `net_distributable_amount` | `NUMERIC(14,2)` (montants monétaires) |
-| `credit_sale_allocations.allocated_amount` | `NUMERIC(14,2)` |
+| `join_aggregator(p_organization_id, p_aggregator_id)` / `leave_aggregator(...)` | `is_aggregator_admin(p_aggregator_id)` OR `is_platform_superadmin()` — **pas** l'admin de l'organisation elle-même : l'adhésion à un regroupement est une décision du regroupement, pas une auto-inscription unilatérale. |
+| `link_ccf_project_to_mrv(p_ccf_project_id, p_mrv_project_id)` | `is_ccf_project_coordinator(p_ccf_project_id)` (coordonnateur de **ce** projet précis) OR `is_platform_superadmin()`. |
+| `create_credit_issuance(p_verification_session_id, ...)` | `verification_sessions.verifier_user_id = auth.uid()` **pour cette session précise** OR `is_platform_superadmin()`. Si `verifier_user_id IS NULL` (vérificateur externe sans compte), réservé à `is_platform_superadmin()` avec `actor_id` consigné explicitement dans l'événement d'audit comme agissant pour le compte d'un tiers externe. |
+| `issue_credit_lot(p_credit_issuance_id, ...)` | Reconstruire la chaîne `credit_issuance → verification_session → project → operational_unit → organization → aggregator_memberships (actif)` pour déterminer l'`aggregator_id` propriétaire, puis exiger `is_aggregator_admin(cet_aggregator_id)` OR `is_platform_superadmin()`. Si la chaîne est incomplète (`operational_unit_id IS NULL`, ou aucune adhésion active), **rejeter explicitement** plutôt que de laisser passer par défaut — absence de propriétaire clair = refus, jamais une autorisation implicite. |
+| `void_credit_issuance(...)` / `void_credit_lot(...)` | Même chaîne d'autorisation qu'`issue_credit_lot` ; `void_credit_issuance` interdit en plus si un lot enfant est `sold`/`retired` (§1). |
+| `finalize_credit_sale_allocations(p_credit_sale_id)` | `is_aggregator_admin(credit_sales.aggregator_id)` **pour cette vente précise** OR `is_platform_superadmin()`. |
 
-`(14,4)` pour les quantités (permet des fractions de tCO2e précises), `(14,2)` pour les montants (cents). Ces précisions sont indicatives, à confirmer avec un besoin métier réel avant migration — mais `NUMERIC` lui-même n'est pas négociable pour ces colonnes.
+**Règle générale ajoutée pour toute future RPC de ce domaine** : si la chaîne de propriété (organisation → regroupement → objet) ne peut pas être résolue sans ambiguïté au moment de l'appel, la RPC doit refuser plutôt que d'autoriser par défaut — la charge de la preuve d'autorisation est toujours sur l'appelant, jamais sur l'absence de contre-indication.
 
 ---
 
-## 4. Vérification complétée avec réduction nulle autorisée
-
-**Correction demandée : seule la création d'un lot doit exiger une quantité positive, pas la complétion d'une vérification.**
-
-**Décision révisée** : le trigger d'immutabilité sur `verification_sessions` (§4 v1) exige désormais seulement `verified_reduction_tco2e IS NOT NULL AND >= 0` (et `eligible_tco2e IS NOT NULL AND >= 0`) pour autoriser `status = 'completed'` — **zéro est une valeur légitime** (un cycle de vérification peut conclure qu'aucune réduction admissible n'a été démontrée, ce qui est une information utile en soi, pas une erreur de saisie).
-
-**La positivité stricte ne s'applique qu'à la création d'un lot** — déjà garantie élégamment par la combinaison de deux mécanismes existants sans ajouter de nouvelle contrainte : `credit_lots.quantity_tco2e` conserve son `CHECK (quantity_tco2e > 0)`, et le trigger anti-surémission (§6) compare contre `eligible_tco2e` — si `eligible_tco2e = 0`, aucun lot ne pourra jamais être créé pour cette session (0 moins n'importe quelle quantité positive dépasse toujours 0), sans qu'il soit nécessaire d'écrire une contrainte séparée pour ce cas.
-
----
-
-## 5. Correction du contrôle de surémission — `retired` continue de consommer
-
-**Correction demandée, bug identifié dans la v1 : les lots `retired` avaient été exclus par erreur du calcul de consommation.**
-
-**Décision corrigée** : `retired` signifie que le crédit a été utilisé/retiré du marché après une vente légitime — la quantité **reste engagée** contre la session de vérification source, définitivement. Seul un statut distinct `voided` (§8), résultant d'une procédure d'annulation contrôlée, libère la quantité.
-
-**Formule révisée du trigger anti-surémission** :
-```
-SUM(quantity_tco2e) FILTER (WHERE status != 'voided')
-  <= eligible_tco2e
-  (pour un même verification_session_id)
-```
-Seule la valeur `'voided'` est exclue du calcul — `available`, `reserved`, `sold` et `retired` comptent tous contre la quantité admissible.
-
----
-
-## 6. Verrouillage transactionnel contre la surémission concurrente
-
-**Correction demandée, angle mort réel de la v1 : un trigger seul ne suffit pas contre la concurrence.**
-
-**Explication du problème** : en isolation `READ COMMITTED` (défaut Postgres), deux transactions concurrentes créant chacune un lot pour la même session de vérification peuvent chacune calculer la somme existante **avant** de voir l'insertion de l'autre (ni l'une ni l'autre n'est encore validée/committée) — un trigger `BEFORE INSERT` qui se contente de sommer les lignes existantes peut laisser passer les deux insertions alors que leur total combiné dépasse `eligible_tco2e`. C'est un problème classique de « check-then-act » sous concurrence, qu'aucune contrainte déclarative ne peut résoudre seule.
-
-**Décision : verrou de ligne explicite dans une RPC dédiée, pas seulement un trigger.** La création d'un lot ne doit jamais se faire par un `INSERT` direct — uniquement via une RPC `issue_credit_lot(...)` (`SECURITY DEFINER`) qui, dans l'ordre :
-1. `SELECT 1 FROM verification_sessions WHERE id = p_verification_session_id FOR UPDATE` — verrouille la ligne de la session, forçant toute transaction concurrente visant la même session à attendre.
-2. Recalcule la somme déjà engagée (maintenant garantie à jour, la transaction concurrente étant bloquée).
-3. Rejette si `somme + p_quantity_tco2e > eligible_tco2e`.
-4. Insère le lot (le trigger du point 5 reste en place comme filet de sécurité en profondeur — défense en profondeur, pas redondance inutile : il protège aussi contre un futur `UPDATE` direct qui contournerait la RPC).
-
-Le trigger seul reste responsable de l'intégrité en écriture unique ; le verrou dans la RPC est responsable de l'intégrité sous concurrence. Les deux sont nécessaires, aucun des deux ne remplace l'autre.
-
----
-
-## 7. Lot mono-organisation ou multi-organisation — tranché : multi-organisation
-
-**Correction demandée : trancher explicitement, proposer `credit_lot_sources` si multi-organisation.**
-
-**Décision : multi-organisation, `credit_lot_sources` retenue.** Justification : la prémisse même du domaine CCF est la consolidation entre **plusieurs** organisations (coordonnateur + manufacturier(s) + recycleur dans le seed de démo) — une réduction d'émissions issue d'un transport consolidé est une réalisation **partagée**, pas attribuable à une seule organisation. Un modèle mono-organisation contredirait la logique métier centrale du produit.
-
-**Table cible :**
-```
-credit_lot_sources
-  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  credit_lot_id      UUID NOT NULL REFERENCES credit_lots(id) ON DELETE CASCADE
-  organization_id    UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT
-  contributed_tco2e  NUMERIC(14,4) NOT NULL CHECK (contributed_tco2e > 0)
-  UNIQUE (credit_lot_id, organization_id)
-```
-**Invariant garanti par la base (trigger, agrégat)** : `SUM(contributed_tco2e) FILTER (WHERE credit_lot_id = X) = credit_lots.quantity_tco2e` pour tout lot X — la somme des contributions doit égaler exactement la quantité totale du lot, ni plus ni moins.
-
-**Conséquence positive sur le point 9 (modèle financier)** : la répartition proportionnelle d'une vente peut désormais se calculer directement à partir de `credit_lot_sources.contributed_tco2e`, sans passer par la chaîne indirecte `projet → unité opérationnelle → organisation` proposée en v1 — plus simple et plus explicite. La chaîne `credit_lot → mrv_project_id → operational_unit_id → organization` reste utile comme **traçabilité administrative** (quel projet MRV a produit ce lot) mais n'est plus le mécanisme de calcul financier.
-
----
-
-## 8. Séparation explicite de `retired` et `voided`
-
-**Décision : `credit_lots.status` devient `CHECK (status IN ('available','reserved','sold','retired','voided'))`.**
-
-Sémantique distincte :
-- **`retired`** : fin de vie normale après usage légitime (généralement après `sold`) — quantité engagée définitivement, jamais libérée (§5).
-- **`voided`** : annulation administrative d'un lot émis à tort (ex. erreur de vérification découverte après coup) — quantité libérée, réintégrée à l'admissible disponible pour la session.
-
-**Machine à états révisée :**
-```
-available → reserved     (négociation en cours)
-reserved  → available    (négociation annulée)
-reserved  → sold          (vente confirmée)
-sold      → retired       (fin de vie normale après usage)
-available → voided        (annulation directe avant toute vente)
-reserved  → voided        (annulation d'une réservation erronée)
-```
-**Transition volontairement non tranchée ici, hors périmètre Tranche 0** : `sold → voided` (annuler un lot déjà vendu) exigerait de définir d'abord une procédure de réversion de vente (remboursement, avis à l'acheteur, etc.) — ce n'est pas une simple transition de statut, c'est un processus métier à concevoir séparément avant la Tranche 6. Interdit pour l'instant (`sold` ne peut aller qu'à `retired`).
-
----
-
-## 9. Modèle minimal d'émission externe
-
-**Colonnes ajoutées à `credit_lots`** (métadonnées de registre externe, toutes nullables — un lot MVP peut exister sans jamais être inscrit à un registre externe formel) :
-```
-registry_program              TEXT NULL   -- ex. "Verra VCS", "Alberta TIER", registre régional volontaire
-external_registry_id          TEXT NULL   -- identifiant du projet/compte dans ce registre
-external_serial_number_start  TEXT NULL
-external_serial_number_end    TEXT NULL
-issuance_date                 DATE NULL   -- date d'émission officielle par le registre externe (≠ created_at, notre horodatage interne)
-```
-`vintage_year` (millésime) existe déjà sur `credit_lots` — satisfait sans modification.
-
----
-
-## 10. Modèle de vente complété
-
-**`credit_sales` révisée :**
-```
-gross_amount               NUMERIC(14,2)               -- montant brut de la vente
-platform_fee_pct           NUMERIC(5,4) NULL            -- ex. 0.0500 = 5 %
-platform_fee_amount        NUMERIC(14,2) NULL
-net_distributable_amount   NUMERIC(14,2)
-  GENERATED ALWAYS AS (gross_amount - COALESCE(platform_fee_amount, 0)) STORED
-```
-`currency` existe déjà (`TEXT DEFAULT 'CAD'`) — conservée.
-
-**Versionnement de la règle de répartition** : `distribution_rules` reçoit `rule_version INT NOT NULL DEFAULT 1`, incrémenté à chaque modification substantielle. `credit_sale_allocations` reçoit `distribution_rule_id UUID REFERENCES distribution_rules(id)` et `rule_version_applied INT` — chaque allocation garde la trace figée de la règle exacte utilisée au moment du calcul, pour qu'une modification ultérieure de la règle ne réinterprète jamais silencieusement une répartition déjà calculée.
-
-**Statuts d'approbation et de paiement** : `credit_sale_allocations.status` devient `CHECK (status IN ('pending','approved','paid','disputed','cancelled'))` — ajout de `approved` comme étape intermédiaire explicite entre le calcul (`pending`) et le paiement (`paid`). **Question ouverte, non tranchée ici** : qui a l'autorité d'approuver (`pending → approved`) — l'admin du regroupement seul, ou une double validation avec l'organisation bénéficiaire ? Aucun rôle « finance » n'existe aujourd'hui dans le modèle de permissions — à trancher explicitement en Tranche 6, pas dans cette tranche de conception.
-
----
-
-## 11. Audit RLS des nouvelles colonnes/tables et RPC transactionnelles nécessaires
-
-**Principe RLS général appliqué aux 3 nouvelles tables** : lecture élargie aux parties légitimement concernées, écriture **jamais directe** — uniquement via RPC `SECURITY DEFINER`, cohérent avec le patron déjà établi pour `accept_project_invitation()` (`MVP-DA-018`).
-
-| Table | Lecture (SELECT) | Écriture |
-|---|---|---|
-| `aggregator_memberships` | `is_organization_member(organization_id)` OR `is_aggregator_admin(aggregator_id)` OR `is_platform_superadmin()` | Aucune policy INSERT/UPDATE pour les rôles applicatifs — uniquement via RPC |
-| `ccf_mrv_project_links` | `is_ccf_project_coordinator(ccf_project_id)` OR `is_ccf_project_participant(ccf_project_id)` OR `is_project_admin()`/`is_verifier()` (côté MRV) OR `is_platform_superadmin()` | Idem, RPC uniquement |
-| `credit_lot_sources` | `is_organization_member(organization_id)` (une organisation source voit sa propre part) OR `is_aggregator_admin()` du regroupement propriétaire du lot OR `is_verifier()` | Idem, RPC uniquement (`issue_credit_lot`) |
-
-**Colonnes ajoutées à des tables existantes — recommandations de durcissement** :
-- `verification_sessions.verified_reduction_tco2e`/`eligible_tco2e` : recommandé de restreindre leur `UPDATE` à `is_verifier()` spécifiquement (pas `is_project_admin()` en général) — un admin de projet ne devrait pas pouvoir modifier un résultat de vérification après coup sans être lui-même le vérificateur désigné. Point de durcissement RLS à écrire en même temps que la migration du point 4.
-- `credit_lots.issuance_date`/`external_*` : une fois `issuance_date` renseignée, ces colonnes devraient devenir immuables (trigger `BEFORE UPDATE`, pas une policy RLS — cohérent avec le traitement de `verified_reduction_tco2e` en §4 v1).
-
-**RPC transactionnelles nécessaires (liste, pas d'implémentation) :**
-1. `join_aggregator(p_organization_id, p_aggregator_id)` — clôture l'adhésion active existante (s'il y en a une) et en ouvre une nouvelle, atomiquement.
-2. `leave_aggregator(p_organization_id, p_reason)` — clôture l'adhésion active sans en ouvrir de nouvelle.
-3. `link_ccf_project_to_mrv(p_ccf_project_id, p_mrv_project_id)` / `unlink_ccf_project_from_mrv(...)` — même logique de bascule que 1/2, pour `ccf_mrv_project_links`.
-4. `issue_credit_lot(p_verification_session_id, p_quantity_tco2e, p_sources jsonb, ...)` — verrou + vérification + insertion du lot + insertion des lignes `credit_lot_sources` + événement d'audit, en une seule transaction (§6, §7).
-5. `void_credit_lot(p_credit_lot_id, p_reason)` — restreint à `is_aggregator_admin()`/`is_platform_superadmin()`, transition vers `voided`, libère la quantité, exige un motif (non nul), log d'audit obligatoire.
-6. `finalize_credit_sale_allocations(p_credit_sale_id)` — valide que `SUM(allocated_tco2e) = credit_sales.total_tco2e` avant d'autoriser la transition `credit_sales.status → 'confirmed'` ; recommandé comme porte de validation plutôt qu'un trigger par ligne, pour ne pas rejeter des états intermédiaires légitimes pendant la saisie progressive d'une répartition.
-
----
-
-## 12. Cohérence du choix `carbon_event_type` avec les décisions ADR existantes
-
-**Correction demandée : vérifier la cohérence avec `TEXT + CHECK` déjà privilégié.**
-
-**Vérifié dans `ADR-MVP.md`** : `MVP-DA-015` tranche explicitement **contre** un ENUM générique pour `status`/`phase`, au profit de `TEXT + CHECK` par table — avec une exception explicitement documentée pour « des types à vocation unique et stable » (`mandate_scope`, `document_visibility`, `logistics_step_type`, **`ccf_event_type`**). `ccf_event_type` est donc actuellement listé comme exception légitime à ENUM.
-
-**Mais l'expérience réelle contredit cette exception pour un catalogue d'événements** : `ccf_event_type` a nécessité **7 migrations `ALTER TYPE ... ADD VALUE`** après sa création initiale (documenté dans le gel, §9septricies/§10) — la prémisse « vocation unique et stable » ne s'est pas vérifiée en pratique pour un catalogue d'événements, qui grandit naturellement à mesure que de nouvelles fonctionnalités sont livrées.
-
-**Décision révisée : `carbon_event_type` en `TEXT + CHECK`, pas en ENUM.** Le chantier carbone est explicitement prévu pour être livré **par tranches successives** (`MVP-Carbone-Regroupements.md`), chaque tranche ajoutant vraisemblablement de nouveaux types d'événements — c'est exactement le scénario évolutif que `MVP-DA-015` cherche à éviter avec ENUM, indépendamment de l'exception qui y est listée pour `ccf_event_type`. Recommandation : traiter cette exception comme un choix qui ne se répète pas ici, et documenter formellement dans l'ADR (à la prochaine mise à jour) que l'exception `ccf_event_type` est elle-même reconsidérée à la lumière de l'expérience — sans la modifier rétroactivement (changement d'ENUM vers TEXT sur une table déjà en production serait une migration séparée, hors périmètre de cette tranche).
-
-**Schéma révisé de `carbon_business_events` :**
-```
-carbon_business_events
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  event_type      TEXT NOT NULL CHECK (event_type IN (
-                    'verification_session_started','verification_session_completed',
-                    'credit_lot_issued','credit_lot_reserved','credit_lot_sold',
-                    'credit_lot_retired','credit_lot_voided',
-                    'credit_sale_created','credit_sale_confirmed','credit_sale_settled',
-                    'credit_sale_allocated','credit_sale_allocation_approved','credit_sale_allocation_paid'
-                  ))
-  object_type     TEXT NOT NULL CHECK (object_type IN (
-                    'verification_session','credit_lot','credit_sale','credit_sale_allocation',
-                    'aggregator_membership','ccf_mrv_project_link'
-                  ))
-  object_id       UUID NOT NULL
-  organization_id UUID REFERENCES organizations(id)
-  actor_id        UUID REFERENCES profiles(id)
-  payload         JSONB
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-Ajout des valeurs `credit_lot_voided`, `credit_sale_allocation_approved`, `credit_sale_allocation_paid` par rapport à la v1, cohérent avec §5, §8, §10.
-
----
-
-## Diagramme relationnel cible
+## Diagramme relationnel cible (v3)
 
 ```
 organizations ──< aggregator_memberships >── aggregators
      │                                            │
-     │                                     aggregator_admins
+     │                                    aggregator_admins
      │
      ├──< ccf_projects >── ccf_mrv_project_links ──< projects (MRV) >── operational_units
      │        │                                          │
      │   project_participants                    verification_sessions
+     │                                             (period_start/end,
+     │                                              verifier_user_id,
+     │                                              verified/eligible_tco2e)
      │                                                    │
-     │                                            credit_lots ──< credit_lot_sources >── organizations
-     │                                                    │              (multi-org, §7)
+     │                                            credit_issuances ──< credit_issuance_sources >── organizations
+     │                                             (immuable, registre externe)   (multi-org, §1 v2)
+     │                                                    │
+     │                                            credit_lots (commercial, mutable)
+     │                                                    │
      │                                            credit_sale_lots
      │                                                    │
-     │                                            credit_sales ──< distribution_rules (versionnée)
+     │                                            credit_sales (gross/fee/net générés)
+     │                                                    │
+     │                                            distribution_rules (append-only, versionnage par ligne)
      │                                                    │
      └──────────────────────────────────< credit_sale_allocations
                                                     │
-                                          carbon_business_events (audit, TEXT+CHECK, §12)
+                                          carbon_business_events (TEXT+CHECK, audit)
 ```
-Lecture : `organizations` est le point d'ancrage double — via `aggregator_memberships` (gouvernance du regroupement) et via `ccf_projects`/`credit_lot_sources` (participation opérationnelle et contribution aux réductions). Les deux chemins sont indépendants — une organisation peut contribuer à un lot sans que son regroupement en soit propriétaire administratif exclusif (cas d'un regroupement multi-organisations où chaque contributeur reste rattaché individuellement).
 
 ---
 
-## Invariants garantis par la base (constraints/triggers) vs garantis par RPC uniquement
+## Invariants garantis par la base vs garantis par RPC (mise à jour v3)
 
-**Garantis par la base, vrais à tout instant sur les données committées, quel que soit le chemin d'écriture (y compris le SQL Editor) :**
-- `credit_lots.quantity_tco2e > 0` (`CHECK`)
-- Au plus une adhésion active par organisation (`aggregator_memberships`, index unique partiel)
-- Au plus un lien actif par `ccf_project_id` et par `mrv_project_id` (`ccf_mrv_project_links`, deux index uniques partiels)
-- `SUM(credit_lot_sources.contributed_tco2e)` = `credit_lots.quantity_tco2e` par lot (trigger)
-- `SUM(quantity_tco2e) FILTER (WHERE status != 'voided') <= eligible_tco2e` par session (trigger — **correct pour l'intégrité en écriture séquentielle, insuffisant seul sous concurrence, voir ci-dessous**)
-- Transitions de statut de lot restreintes à la machine à états du §8 (trigger)
-- `verified_reduction_tco2e`/`eligible_tco2e` non nuls et `>= 0` avant `status = 'completed'` (trigger), puis immuables après (trigger)
+**Garantis par la base :**
+- Toutes les contraintes déjà listées en v2 (adhésion/lien actifs uniques, quantités positives, machine à états des lots).
+- **Nouveau (§1)** : `credit_issuances` immuable sauf champs de void (trigger) ; deux niveaux de plafond (session→émission, émission→lots).
+- **Nouveau (§2)** : `distribution_rules` immuable sauf `effective_to` (trigger) ; une seule règle active par regroupement (index unique partiel) ; `gross_amount`/`platform_fee_amount`/`net_distributable_amount` toujours cohérents entre eux (colonnes générées, mêmes lignes).
+- **Nouveau (§3)** : `eligible_tco2e <= verified_reduction_tco2e` (`CHECK`) ; aucun chevauchement de périodes entre deux sessions `completed` du même projet (`EXCLUDE USING gist`).
 
-**Garantis uniquement par la discipline procédurale des RPC (pas exprimables en contrainte déclarative pure) :**
-- L'absence de surémission **sous concurrence réelle** — le trigger seul est nécessaire mais pas suffisant (§6) ; la garantie complète dépend du verrou `SELECT ... FOR UPDATE` pris par `issue_credit_lot()`.
-- L'autorisation (qui a le droit d'annuler un lot, d'approuver une allocation) — appliquée par RLS sur les RPC/tables, mais la **logique de workflow** (motif obligatoire, séquence d'approbation) est portée par le code des RPC, pas par des contraintes SQL.
-- L'égalité `SUM(allocated_tco2e) = credit_sales.total_tco2e` — volontairement **pas** un trigger par ligne (rejetterait les états intermédiaires légitimes), vérifiée seulement au moment de `finalize_credit_sale_allocations()`.
-- L'atomicité « clôturer l'ancienne adhésion + ouvrir la nouvelle » ou « clôturer l'ancien lien MRV + ouvrir le nouveau » — repose sur le fait que la RPC fait les deux opérations dans une seule transaction, pas sur une contrainte qui l'imposerait indépendamment du chemin d'écriture.
+**Garantis uniquement par les RPC :**
+- Toute l'autorisation objet par objet du §4 — **aucune** de ces vérifications n'est exprimable en RLS pur puisque les RPC sont `SECURITY DEFINER` par nécessité (verrouillage transactionnel, §6 v2) ; la RLS des tables sous-jacentes reste un filet pour les lectures, pas pour ces écritures.
+- `SUM(credit_sale_lots.quantity_tco2e) = credit_sales.total_tco2e` — vérifié à `finalize_credit_sale_allocations()`, pas en trigger par ligne (§2a).
+- L'interdiction de `void_credit_issuance` si un lot enfant est `sold`/`retired` — règle de workflow, pas une contrainte déclarative.
+- Le verrouillage `SELECT ... FOR UPDATE` empêchant la surémission concurrente (v2 §6), maintenant nécessaire à **deux** niveaux (verrou sur `verification_sessions` pour `create_credit_issuance`, verrou sur `credit_issuances` pour `issue_credit_lot`).
 
 ---
 
-## Cas de concurrence à tester (avant toute mise en production de ces mécanismes)
+## Cas de concurrence à tester (mise à jour v3 — 2 cas ajoutés aux 6 de la v2)
 
-1. **Deux `issue_credit_lot()` concurrents sur la même session de vérification**, dont la somme des quantités demandées dépasse `eligible_tco2e` alors qu'aucune des deux prise individuellement ne le dépasse — attendu : exactement une des deux transactions réussit, l'autre attend puis échoue proprement après avoir vu la première committée.
-2. **`issue_credit_lot()` concurrent à `void_credit_lot()` sur la même session** — la quantité libérée par l'annulation ne doit être visible à la création d'un nouveau lot qu'une fois le `void` committé, jamais avant (pas de lecture de données non validées).
-3. **Deux `join_aggregator()` concurrents pour la même organisation**, vers deux regroupements différents — attendu : un seul succès, l'autre rejeté par l'index unique partiel (même si la RPC tente de clôturer une adhésion « active » qui n'existe pas encore au moment de sa propre lecture).
-4. **Deux `link_ccf_project_to_mrv()` concurrents** liant le même `ccf_project_id` à deux `mrv_project_id` différents — attendu : un seul succès (index unique partiel sur `ccf_project_id`).
-5. **Deux `link_ccf_project_to_mrv()` concurrents** liant deux `ccf_project_id` différents au même `mrv_project_id` — attendu : un seul succès (index unique partiel sur `mrv_project_id`, symétrique au cas 4).
-6. **Deux `finalize_credit_sale_allocations()` concurrents** sur la même vente, après une modification concurrente d'une ligne d'allocation — attendu : la validation du total doit voir un état cohérent, pas une lecture partielle entre deux écritures concurrentes sur les lignes d'allocation.
+Les 6 cas de la v2 restent valides, reformulés pour la nouvelle séparation émission/commercial (le verrou se prend maintenant sur `verification_sessions` OU `credit_issuances` selon le niveau concerné). **Deux cas supplémentaires :**
+
+7. **Deux `create_credit_issuance()` concurrents sur la même session**, dont la somme dépasse `eligible_tco2e` — attendu : un seul succès (verrou sur `verification_sessions`).
+8. **Deux appels concurrents créant chacun une `verification_sessions` avec des périodes qui se chevauchent** pour le même projet, toutes deux visant `status = 'completed'` — attendu : la contrainte `EXCLUDE USING gist` rejette la seconde transaction à la validation, indépendamment de tout verrou applicatif (garantie déclarative, pas procédurale — bon exemple d'un invariant que la base garantit nativement sans RPC).
 
 ---
 
-## Synthèse des migrations envisagées (toujours non écrites, ordre logique indicatif)
+## Synthèse des migrations envisagées (v3, toujours non écrites)
 
-1. `CREATE TABLE aggregator_memberships (...)` + index unique partiel + RPC `join_aggregator`/`leave_aggregator` ; dépréciation puis suppression de `organizations.aggregator_id`.
-2. `CREATE TABLE ccf_mrv_project_links (...)` + deux index uniques partiels + RPC `link_ccf_project_to_mrv`/`unlink_ccf_project_from_mrv`.
-3. Conversion `FLOAT8 → NUMERIC` sur toutes les colonnes du tableau §3 (migration de type de colonne, `credit_lots`/`credit_sales`/etc. ayant 0 ligne en production — sans risque de perte de précision sur des données existantes).
-4. `ALTER TABLE verification_sessions ADD COLUMN verified_reduction_tco2e NUMERIC(14,4), ADD COLUMN eligible_tco2e NUMERIC(14,4), ADD COLUMN verification_method TEXT;` + trigger de validation `>= 0` + immutabilité post-`completed` + durcissement RLS (`is_verifier()` sur l'`UPDATE` de ces colonnes).
-5. `ALTER TABLE credit_lots ADD COLUMN verification_session_id UUID NOT NULL REFERENCES verification_sessions(id) ON DELETE RESTRICT, ADD COLUMN registry_program TEXT, ADD COLUMN external_registry_id TEXT, ADD COLUMN external_serial_number_start TEXT, ADD COLUMN external_serial_number_end TEXT, ADD COLUMN issuance_date DATE;` + `status` étendu à 5 valeurs + trigger anti-surémission corrigé (§5) + trigger de machine à états (§8) + trigger d'immutabilité post-émission.
-6. `CREATE TABLE credit_lot_sources (...)` + trigger d'égalité de somme + RPC `issue_credit_lot()`/`void_credit_lot()` avec verrou explicite (§6, §7).
-7. `ALTER TABLE credit_sale_lots ADD CONSTRAINT uq_credit_sale_lots UNIQUE (credit_sale_id, credit_lot_id); ALTER TABLE credit_sales ADD COLUMN gross_amount NUMERIC(14,2), ADD COLUMN platform_fee_pct NUMERIC(5,4), ADD COLUMN platform_fee_amount NUMERIC(14,2), ADD COLUMN net_distributable_amount NUMERIC(14,2) GENERATED ALWAYS AS (...) STORED; ALTER TABLE distribution_rules ADD COLUMN rule_version INT NOT NULL DEFAULT 1; ALTER TABLE credit_sale_allocations ADD CONSTRAINT uq_credit_sale_allocations UNIQUE (credit_sale_id, organization_id), ADD COLUMN distribution_rule_id UUID REFERENCES distribution_rules(id), ADD COLUMN rule_version_applied INT, status étendu à 5 valeurs;` + RPC `finalize_credit_sale_allocations()`.
-8. `CREATE TABLE carbon_business_events (event_type TEXT + CHECK, pas ENUM)` + policies RLS dédiées.
+Reprend la synthèse v2 avec les correctifs : `credit_lots` scindée en `credit_issuances`/`credit_lots` (une migration de plus, avec le trigger d'immuabilité et les deux niveaux de plafond) ; `distribution_rules` rendue append-only (trigger d'immuabilité + suppression de la colonne `rule_version` par rapport à la v2) ; `verification_sessions` enrichie de `period_start`/`period_end`/`verifier_user_id` + contrainte d'exclusion + `CHECK (eligible_tco2e <= verified_reduction_tco2e)` ; `credit_sales` simplifiée à un prix unique par vente avec colonnes générées cohérentes ; RPC `create_credit_issuance`/`issue_credit_lot`/`void_credit_issuance`/`void_credit_lot`/`finalize_credit_sale_allocations`/`join_aggregator`/`leave_aggregator`/`link_ccf_project_to_mrv` toutes avec l'autorisation objet par objet du §4.
 
-**Toujours hors périmètre de cette tranche, à trancher séparément :** la procédure de réversion d'une vente déjà confirmée (§8), le rôle d'approbation financière (§10), la méthodologie de décote/buffer sur `eligible_tco2e` (héritée de la v1, toujours ouverte), et les écrans eux-mêmes (Tranches 1-6).
+**Prochaine étape, sur ta confirmation** : préparer ces migrations comme des propositions numérotées et révisables (fichiers `.sql` à lire et approuver un par un), sans exécution automatique — chaque migration restera soumise à ton approbation explicite avant tout `supabase db push`, conformément à la contrainte de gel toujours en vigueur (`ADR-MVP.md` §9septricies).
