@@ -1,6 +1,24 @@
-# Tranche 0 — Architecture du chantier carbone (v4)
+# Tranche 0 — Architecture du chantier carbone (v4 + corrections finales)
 
-**Statut : proposition de conception révisée, quatrième passe.** Aucune migration exécutée. Cette version intègre 12 blocages majeurs plus 2 points secondaires identifiés après revue externe de la v3 — la revue la plus détaillée reçue jusqu'ici, avec une évaluation explicite « pas encore prêt pour les migrations » que cette version cherche à résoudre point par point, sans rien esquiver.
+**Statut : validée comme architecture cible par l'utilisateur, sous réserve des 7 corrections techniques finales ci-dessous.** Aucune migration exécutée — les migrations sont désormais préparées comme fichiers séparés, numérotés, révisables (voir `supabase/carbon_migrations_proposed/`), sans exécution ni fusion automatique.
+
+---
+
+## Corrections finales (avant préparation des migrations)
+
+**1. Règle d'arrondi PostgreSQL — erreur de fait corrigée.** Le document affirmait que `ROUND(numeric, int)` utilise l'arrondi bancaire (« round half to even ») par défaut en PostgreSQL — **c'est faux**. Le comportement réel de `ROUND()` sur le type `numeric` est l'arrondi arithmétique standard (« round half away from zero » : 0,5 arrondit toujours vers le haut en valeur absolue). `complete_verification_session()` (§3/§4 migration) documente désormais explicitement ce comportement réel plutôt que le comportement erroné précédemment cité — aucun changement de fonction nécessaire, seulement une correction de la documentation pour qu'une future implémentation ne présume pas d'un comportement inexistant.
+
+**2. Interdiction stricte des ventes avant émission officielle, sans ambiguïté produit.** La v4 laissait ouverte la possibilité future de vendre une « réduction admissible non encore émise » comme un second produit commercial distinct — supprimé. **Décision MVP, sans exception** : `credit_sale_lots` ne peut référencer un `credit_lot` que si l'émission parente a `issuance_status = 'issued'`, vérifié par un trigger dédié sur `credit_sale_lots` **en plus** (défense en profondeur, pas en remplacement) du verrou déjà existant sur `commercial_status` (§1 v4, un lot ne quitte `unavailable` que si `issued`). Toute vente d'une réduction pré-émission est explicitement hors périmètre de ce MVP, pas simplement non implémentée.
+
+**3. Mécanique de supersession de `verification_outcomes`, précisée.** Modèle officiel (voir §12) : `status TEXT CHECK (status IN ('active','superseded'))` + `supersedes_outcome_id` référençant **vers l'arrière** (le nouveau résultat référence l'ancien qu'il remplace, jamais l'inverse). Quand `complete_verification_session()` est appelée pour une session ayant déjà un résultat actif : `p_adjustment_reason` devient **obligatoire** (pas seulement au-delà d'un seuil, comme c'était le cas pour un premier résultat) ; la RPC verrouille l'ancien résultat (`SELECT ... FOR UPDATE`), le transitionne à `status = 'superseded'`, puis insère le nouveau résultat avec `status = 'active'` et `supersedes_outcome_id` pointant vers l'ancien — le tout dans une seule transaction. Le trigger d'immutabilité est donc précisé : il rejette tout changement sauf la transition de `status` de `'active'` vers `'superseded'` (jamais l'inverse, jamais une deuxième fois, `'superseded'` terminal).
+
+**4. Validation explicite qu'une émission a au moins une source.** Le contrôle différé (§4 v4) rejette déjà indirectement une émission sans source cohérente (la somme ne peut égaler `issued_quantity_tco2e > 0` si aucune ligne n'existe), mais `create_credit_issuance()` ajoute désormais une vérification amont explicite — rejet immédiat et lisible si `p_sources` est vide ou nul, avant toute tentative d'insertion, en plus de (pas à la place de) la contrainte différée qui reste le filet de sécurité structurel.
+
+**5. Séparation des journaux d'échec et des événements métier.** `carbon_business_events` ne contient désormais **que** des événements métier réussis. Les refus d'autorisation et échecs de validation des RPC sont consignés dans une table distincte, `carbon_rpc_failures` — audience et politique de rétention différentes (revue de sécurité vs audit métier), ne polluent jamais le fil d'événements métier.
+
+**6. Cohérence des devises.** Aucune conversion automatique dans ce MVP — un trigger sur `credit_sale_costs` et `credit_sale_allocations` rejette toute ligne dont `currency` diffère de `credit_sales.currency` pour la même vente.
+
+**7. Catalogue d'événements complété.** Voir le catalogue exhaustif dans la migration 01 (§ fondations transverses) — couvre désormais chaque entité/transition introduite en v2-v4 (regroupements, liens CCF-MRV, sessions/résultats de vérification avec supersession, émissions avec leurs 5 statuts, lots commerciaux, ventes/coûts/ajustements/allocations).
 
 ---
 
@@ -12,33 +30,43 @@
 
 ```
 credit_issuances.issuance_status TEXT NOT NULL DEFAULT 'internal'
-  CHECK (issuance_status IN ('internal','eligible','submitted','issued','externally_cancelled'))
+  CHECK (issuance_status IN ('internal','eligible','submitted','issued','externally_cancelled','voided'))
 
 credit_lots.commercial_status TEXT NOT NULL DEFAULT 'unavailable'
   CHECK (commercial_status IN ('unavailable','available','reserved','sold','retired','voided'))
 ```
-(`commercial_status` remplace `status` — renommage pour lever toute ambiguïté avec `issuance_status`.)
+(`commercial_status` remplace `status` — renommage pour lever toute ambiguïté avec `issuance_status`. `issuance_status` porte désormais deux terminaux distincts et non ambigus, corrigeant une incohérence relevée après revue : `'voided'` = annulation **interne**, avant toute confirmation par un registre externe, libère la quantité sans preuve requise ; `'externally_cancelled'` = le registre externe a lui-même annulé une émission déjà `'issued'`, traité au niveau du lot commercial via les champs `external_cancellation_*` du §2, preuve obligatoire.)
 
 **Règle d'invariant, trigger sur `credit_lots`** : `commercial_status` ne peut quitter `'unavailable'` que si `credit_issuances.issuance_status = 'issued'` pour l'émission parente. Un lot reste `unavailable` par défaut tant que son émission n'est pas confirmée par le registre — impossible de le vendre en tant que crédit officiellement émis avant ce moment.
 
-**Distinction commerciale explicite, conforme à la remarque juridique** : une vente ne peut être présentée comme « vente de crédits officiellement émis » que si `issuance_status = 'issued'` pour tous les lots vendus. Vendre une réduction admissible non encore émise (`issuance_status` à `'eligible'`/`'submitted'`) resterait possible commercialement dans un marché volontaire préalable, mais devrait être étiqueté différemment côté produit — hors périmètre de cette tranche de trancher la mécanique commerciale exacte de ce second produit, mais le schéma ne l'interdit pas et ne le confond pas non plus avec un crédit émis.
+**Garde structurelle empêchant une émission sans sources de progresser (correction ajoutée après revue)** : un trigger `BEFORE UPDATE ON credit_issuances` rejette toute tentative de faire passer `issuance_status` de `'internal'` vers `'eligible'`, `'submitted'` ou `'issued'` si aucune ligne `credit_issuance_sources` n'existe pour cette émission, ou si leur somme ne correspond pas encore à `issued_quantity_tco2e`. Redondant par conception avec la contrainte différée du §4 et la vérification amont de `create_credit_issuance()` (§4, correction 4) — trois mécanismes indépendants pour le même invariant, à des moments différents (création de source, changement de statut, appel RPC), cohérent avec le principe de défense en profondeur déjà appliqué ailleurs dans ce document.
+
+**Interdiction stricte des ventes avant émission officielle, sans ambiguïté produit (corrigé après revue — remplace une formulation ambiguë antérieure)** : `credit_sale_lots` ne peut référencer un `credit_lot` que si `issuance_status = 'issued'` pour l'émission parente — vérifié par un trigger dédié sur `credit_sale_lots` (migration 07), **en plus** du verrou déjà existant sur `commercial_status` ci-dessus (défense en profondeur, pas redondance inutile). Aucune vente d'une réduction pré-émission n'est permise dans ce MVP — exclusion de portée assumée, pas une limitation temporaire à lever plus tard sans decision explicite.
 
 ---
 
 ## 2. `voided` ne libère pas automatiquement la quantité si le lot a déjà été émis extérieurement
 
-**Décision : la libération de quantité dépend de `issuance_status` de l'émission parente, avec preuve obligatoire au-delà du seuil `issued`.**
+**Erreur de condition trouvée après revue et corrigée** : la règle précédente testait `issuance_status != 'issued'` pour décider si une preuve externe était requise — mais `'externally_cancelled' != 'issued'` est vrai littéralement, alors que `'externally_cancelled'` représente précisément le cas où le registre **a** confirmé l'annulation après une émission officielle — c'est exactement le cas qui doit exiger une preuve, pas celui qui doit en être dispensé.
 
-Colonnes ajoutées à `credit_lots` :
+**Décision corrigée, énumération explicite plutôt qu'une négation ambiguë :**
 ```
-external_cancellation_date       DATE NULL
-external_cancellation_reference  TEXT NULL
-external_cancellation_document_id UUID NULL REFERENCES documents(id)
+issuance_status IN ('internal','eligible','submitted','voided')
+  → annulation interne possible sans preuve externe (l'émission n'a jamais été confirmée par un registre).
+
+issuance_status IN ('issued','externally_cancelled')
+  → preuve d'annulation externe obligatoire avant de libérer la quantité.
 ```
 
-**Règle, appliquée par la RPC `void_credit_lot()` (workflow, pas une contrainte déclarative pure — mais la contrainte suivante empêche un contournement direct) :**
-- Si l'émission parente a `issuance_status != 'issued'` (jamais confirmée par un registre) → `voided` libère la quantité immédiatement, aucune preuve requise.
-- Si `issuance_status = 'issued'` → `voided` **exige** `external_cancellation_date IS NOT NULL AND external_cancellation_reference IS NOT NULL` **avant** la transition, sinon rejet. Contrainte réelle : `CHECK (commercial_status != 'voided' OR NOT EXISTS (émission parente avec issuance_status = 'issued' sans preuve))` — implémentée en trigger, une contrainte `CHECK` seule ne peut pas interroger une autre table.
+**Les champs de preuve appartiennent à `credit_issuances`, pas à `credit_lots`** (correction de placement après revue) — puisque `externally_cancelled` est un état de l'émission réglementaire elle-même (§1), la preuve de son annulation est une donnée de l'émission, pas de chacune de ses subdivisions commerciales :
+```
+credit_issuances
+  external_cancellation_date        DATE NULL
+  external_cancellation_reference   TEXT NULL
+  external_cancellation_document_id UUID NULL REFERENCES documents(id)
+```
+
+**Conséquence sur le cycle commercial des lots** : un `credit_lot` individuel ne peut plus être `voided` unilatéralement une fois son émission parente `issued` — sa mise à `voided` devient une **conséquence** du passage de `credit_issuances.issuance_status` à `'externally_cancelled'` (avec preuve), jamais une action indépendante au niveau du lot. Tant que l'émission reste `issued` sans annulation externe confirmée, ses lots commerciaux ne peuvent transiter que selon la machine à états normale (`available/reserved/sold/retired`) — pas vers `voided`.
 
 ---
 
@@ -59,9 +87,9 @@ complete_verification_session(
 )
 ```
 Cette RPC :
-1. Calcule `calculated_reduction_tco2e` en sommant `project_activity_logs.ghg_reduction_kgco2e` pour les activités du projet dans `[reporting_period_start, reporting_period_end]`, puis applique **`calculated_reduction_tco2e := ROUND(somme_kg / 1000, 4)`** — division explicite par 1000, arrondi à 4 décimales par arrondi standard (`round half to even` de Postgres, comportement par défaut de `ROUND(numeric, int)`, documenté explicitement ici pour qu'aucune implémentation future ne choisisse un arrondi différent sans le remarquer).
+1. Calcule `calculated_reduction_tco2e` en sommant `project_activity_logs.ghg_reduction_kgco2e` pour les activités du projet dans `[reporting_period_start, reporting_period_end]`, puis applique **`calculated_reduction_tco2e := ROUND(somme_kg / 1000, 4)`** — division explicite par 1000, arrondi à 4 décimales. **Comportement réel de `ROUND(numeric, int)` en PostgreSQL, à ne pas confondre avec l'arrondi bancaire** : arrondi arithmétique standard (« round half away from zero » — 0,5 arrondit toujours vers le haut en valeur absolue, jamais vers la valeur paire la plus proche). Documenté ici explicitement pour qu'aucune implémentation future ne présume d'un comportement différent (ex. arrondi bancaire) sans le remarquer.
 2. Présente `calculated_reduction_tco2e` comme **valeur suggérée**, jamais imposée — le vérificateur saisit `verified_reduction_tco2e` explicitement ; si elle diverge de plus d'un seuil à définir (ex. 1 %) de la valeur calculée, `p_adjustment_reason` devient obligatoire (validé par la RPC, pas par une contrainte statique).
-3. Insère un nouveau `verification_outcomes` (§12), jamais un `UPDATE` en place.
+3. Insère un nouveau `verification_outcomes` (§12), jamais un `UPDATE` en place. **Si la session a déjà un résultat actif** (correction de supersession) : `p_adjustment_reason` devient **obligatoire dans tous les cas** (pas seulement au-delà du seuil de divergence — corriger un résultat déjà officiel exige toujours une justification), puis la RPC verrouille l'ancien résultat (`SELECT ... FOR UPDATE`), exécute l'unique `UPDATE` permis sur celui-ci (`status` de `'active'` vers `'superseded'`, jamais l'inverse, jamais une deuxième fois), puis insère le nouveau résultat avec `status = 'active'` et `supersedes_outcome_id` pointant vers l'ancien.
 
 ---
 
@@ -195,6 +223,14 @@ is_assigned_verifier(p_verification_session_id UUID) RETURNS BOOLEAN
 ```
 Remplace `is_verifier()` dans : la policy RLS `UPDATE` sur `verification_sessions`, et l'autorisation interne de `complete_verification_session()` (§3).
 
+**10bis. Portée MRV manquante dans la RLS de `carbon_business_events` — corrigée après revue.** La policy `carbon_business_events_select` initiale (§ci-dessous, migration 01) ne couvre que : super-admin plateforme, acteur de l'événement, membre de l'organisation, admin du regroupement. Elle omet un cas réel : **un vérificateur assigné à une session, qui n'est ni l'acteur de l'événement ni membre de l'organisation concernée**, doit néanmoins pouvoir consulter les événements liés à cette session (ex. `verification_outcome_recorded`, `verification_outcome_superseded`).
+
+Correction retenue : ajouter une colonne `verification_session_id UUID NULL REFERENCES verification_sessions(id) ON DELETE RESTRICT` à `carbon_business_events`, renseignée par toute RPC émettant un événement du domaine vérification, et centraliser la logique de lecture dans une fonction unique plutôt que de faire grossir indéfiniment le `USING` inline de la policy.
+
+**Récursion RLS potentielle, corrigée après revue.** Une première version de cette fonction prenait `p_event_id UUID` en unique paramètre et relisait elle-même la ligne (`SELECT ... FROM carbon_business_events WHERE id = p_event_id`) pour en extraire `actor_id`/`organization_id`/`aggregator_id`. Or cette lecture, exécutée par une fonction `SECURITY INVOKER` appelée depuis la policy `SELECT` de **cette même table**, est elle-même soumise à cette policy — qui rappelle la fonction. Risque réel de récursion RLS. Corrigé en supprimant toute lecture de table à l'intérieur de la fonction : la signature retenue est **`can_view_carbon_event(p_actor_id UUID, p_organization_id UUID, p_aggregator_id UUID, p_verification_session_id UUID) RETURNS BOOLEAN`**, appelée par la policy avec les colonnes de la ligne déjà en cours d'évaluation (`actor_id`, `organization_id`, `aggregator_id`, `verification_session_id`) — aucun accès à `carbon_business_events` depuis l'intérieur de la fonction, donc aucune récursion possible.
+
+**Séquencement délibéré entre migrations 01 et 04** — `is_assigned_verifier()` et `verification_sessions.verifier_user_id` n'existent qu'à partir de la migration 04 ; la migration 01 ne peut donc pas y référer sans créer une dépendance en avant. Solution : `can_view_carbon_event()` est créée dès la migration 01 dans une **version de base** (super-admin, acteur, organisation, regroupement — strictement équivalente à la policy inline qu'elle remplace, aucun comportement nouveau à ce stade), avec `p_verification_session_id` déjà présent dans la signature mais inutilisé, explicitement commentée comme *« à étendre par la migration 04 »*. La migration 04 fait un `CREATE OR REPLACE FUNCTION public.can_view_carbon_event(...)` (même signature) qui ajoute la branche `p_verification_session_id IS NOT NULL AND public.is_assigned_verifier(p_verification_session_id)`, sans toucher à la policy elle-même (qui appelle déjà la fonction avec les 4 paramètres depuis la migration 01) ni à sa signature. Ce découpage évite toute référence à un objet pas encore créé tout en gardant un seul point d'autorisation à maintenir, sans relecture de table.
+
 **Même principe déjà appliqué en v3 pour les RPC liées aux regroupements, reconfirmé ici** : chaque RPC reçoit ou dérive l'`aggregator_id` exact de l'objet concerné (jamais « administre un regroupement quelconque ») — `issue_credit_lot()`, `void_credit_lot()`, `confirm_credit_sale()` vérifient toutes `is_aggregator_admin(objet.aggregator_id)`, où `aggregator_id` est lu depuis l'objet manipulé (§7), pas fourni librement par l'appelant.
 
 ---
@@ -210,8 +246,10 @@ Ce n'est pas un détail d'implémentation reporté — puisque ces RPC deviennen
 - `REVOKE EXECUTE ... FROM PUBLIC` par défaut sur chaque fonction, `GRANT EXECUTE` explicitement accordé uniquement au(x) rôle(s) applicatif(s) requis (`authenticated`, jamais `anon` pour ces RPC).
 - Qualification complète des références de table (`public.nom_table`), jamais de dépendance implicite au `search_path` de la session appelante.
 - Aucune confiance dans le contenu de tout paramètre `jsonb` (ex. `p_sources`) — validation stricte de structure et de valeurs avant utilisation, jamais un `INSERT ... SELECT * FROM jsonb_populate_recordset(...)` non gardé.
-- Journalisation obligatoire (`carbon_business_events`) pour toute action de ce domaine, y compris les échecs d'autorisation significatifs (tentative refusée), pas seulement les succès.
+- Journalisation obligatoire, mais **jamais dans la même table** : `carbon_business_events` reçoit uniquement les actions métier réussies et committées ; les échecs de validation et refus d'autorisation vont dans `carbon_rpc_failures` (ou les journaux serveur pour les erreurs qui doivent réellement remonter une exception au client — voir §11bis ci-dessous) — correction d'une contradiction relevée après revue, cette section affirmait auparavant l'inverse (« y compris les échecs d'autorisation » dans `carbon_business_events`).
 - Gestion des erreurs sans fuite d'information sensible au client (messages génériques exposés, détail complet uniquement dans les logs serveur).
+
+**11bis. Garantie réelle (et limitée) de `carbon_rpc_failures` — précision ajoutée après revue.** Une ligne insérée dans `carbon_rpc_failures` **depuis le bloc `EXCEPTION` d'une RPC ne survit que si cette RPC capture l'erreur, insère la ligne, puis retourne normalement un résultat structuré d'échec (ex. `{success: false, reason: '...'}`) sans relancer l'exception.** Si la RPC relance l'exception vers l'appelant (`RAISE`), ou si la transaction englobante est annulée pour une autre raison, l'insertion dans `carbon_rpc_failures` est annulée avec le reste — une sous-transaction (savepoint PL/pgSQL) protège seulement contre le rollback d'un bloc imbriqué, jamais contre l'annulation de la transaction qui l'englobe. **Conséquence pour l'implémentation (migrations 02-07)** : `carbon_rpc_failures` ne doit être utilisée que pour les échecs de validation/autorisation attendus, où la RPC choisit délibérément de capturer, journaliser, puis retourner un échec structuré plutôt que de lever une exception. Pour les erreurs réellement exceptionnelles qui doivent remonter une exception au client, s'appuyer sur les journaux serveur/applicatifs Postgres, pas sur cette table.
 
 ---
 
@@ -219,21 +257,34 @@ Ce n'est pas un détail d'implémentation reporté — puisque ces RPC deviennen
 
 **Décision, tranchée plutôt que laissée ouverte** : au vu de la direction prise sur l'ensemble de cette révision (historisation immuable systématique — adhésions, liens MRV, règles de distribution, coûts de vente), la cohérence architecturale impose la même logique ici plutôt qu'une simplification MVP qui serait immédiatement en contradiction avec le reste du modèle.
 
+**Bug de conception trouvé après revue et corrigé ici** : une version antérieure proposait que l'ancien résultat référence le nouveau via un champ `superseded_by_outcome_id` (référence **vers l'avant**) — modèle **impossible à exécuter** : l'index unique partiel exigerait que l'ancien résultat soit déjà marqué comme remplacé *avant* que le nouveau résultat (qu'il doit référencer) n'existe. Un blocage circulaire pur. Corrigé en remplaçant ce champ par le modèle officiel `status` (`'active'`/`'superseded'`) + `supersedes_outcome_id` — référence **vers l'arrière** (le nouveau résultat référence l'ancien qu'il remplace) :
+
 ```
 verification_outcomes
   id                             UUID PRIMARY KEY DEFAULT gen_random_uuid()
   verification_session_id        UUID NOT NULL REFERENCES verification_sessions(id) ON DELETE RESTRICT
-  calculated_reduction_tco2e     NUMERIC(14,4) NOT NULL
-  verified_reduction_tco2e        NUMERIC(14,4) NOT NULL CHECK (verified_reduction_tco2e >= 0)
-  eligible_tco2e                  NUMERIC(14,4) NOT NULL CHECK (eligible_tco2e >= 0 AND eligible_tco2e <= verified_reduction_tco2e)
-  verification_report_document_id UUID REFERENCES documents(id)
-  verified_by                     UUID NOT NULL REFERENCES profiles(id)
-  verified_at                     TIMESTAMPTZ NOT NULL DEFAULT now()
-  adjustment_reason               TEXT NULL
-  superseded_by_outcome_id        UUID NULL REFERENCES verification_outcomes(id)
-  created_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
+  status                          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded'))
+  supersedes_outcome_id            UUID NULL REFERENCES verification_outcomes(id) ON DELETE RESTRICT
+  calculated_reduction_tco2e       NUMERIC(14,4) NOT NULL
+  verified_reduction_tco2e         NUMERIC(14,4) NOT NULL CHECK (verified_reduction_tco2e >= 0)
+  eligible_tco2e                   NUMERIC(14,4) NOT NULL CHECK (eligible_tco2e >= 0 AND eligible_tco2e <= verified_reduction_tco2e)
+  verification_report_document_id  UUID REFERENCES documents(id)
+  verified_by                      UUID NOT NULL REFERENCES profiles(id)
+  verified_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
+  adjustment_reason                TEXT NULL
+  created_at                       TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
-**Immuable après création** (trigger, sauf `superseded_by_outcome_id` qui ne peut être renseigné qu'une seule fois, jamais réécrit). `UNIQUE (verification_session_id) WHERE superseded_by_outcome_id IS NULL` — un seul résultat actif à la fois par session, même patron d'index unique partiel que tout le reste du document. Corriger un résultat erroné = insérer un nouveau `verification_outcomes` et marquer l'ancien comme remplacé, jamais un `UPDATE`.
+
+`supersedes_outcome_id` pointe **vers l'arrière** (le nouveau résultat référence l'ancien qu'il remplace), jamais vers l'avant — ce qui élimine la dépendance circulaire. `UNIQUE (verification_session_id) WHERE status = 'active'` — un seul résultat actif à la fois par session.
+
+**Séquence correcte de `complete_verification_session()` en cas de supersession, dans une seule transaction :**
+1. `SELECT ... FOR UPDATE` sur le résultat actif existant de cette session (verrou, cohérent avec le principe de verrouillage déjà établi §6 v2).
+2. `UPDATE verification_outcomes SET status = 'superseded' WHERE id = <ancien>` — libère l'index unique partiel.
+3. `INSERT INTO verification_outcomes (..., status, supersedes_outcome_id) VALUES (..., 'active', <ancien>.id)` — peut maintenant s'insérer sans conflit, puisque l'ancien n'est plus `'active'`.
+
+Si l'étape 3 échoue pour une raison quelconque (contrainte violée, erreur), toute la transaction s'annule automatiquement — l'étape 2 (passage de l'ancien à `'superseded'`) est annulée avec elle, l'ancien résultat redevient actif comme si de rien n'était. Aucun état intermédiaire incohérent ne peut être committé.
+
+**Immuable après création, sauf `status`** (trigger) — `status` ne peut transitionner que de `'active'` vers `'superseded'`, jamais l'inverse, jamais une deuxième fois (`'superseded'` est terminal).
 
 `verification_sessions` garde uniquement : `project_id`, `status`, `reporting_period_start`/`end`, `verifier_user_id`, `verifier_org`/`verifier_contact` — le **résultat** de la vérification vit entièrement dans `verification_outcomes`.
 
@@ -310,6 +361,20 @@ Chaque dimension signalée « encore insuffisante » ou « manquante » est adre
 
 ---
 
-## Prochaine étape
+## Plan des migrations proposées
 
-Sur ta confirmation que cette version constitue l'architecture cible : préparation des migrations comme propositions numérotées et révisables (fichiers `.sql` séparés, un par sous-domaine cohérent — émission/commercial, vérification/outcomes, financier, gouvernance/RPC, événements), chacune soumise à ta lecture et ton approbation explicite avant tout `supabase db push`, conformément au gel toujours en vigueur (`ADR-MVP.md` §9septricies).
+**Emplacement : `supabase/carbon_migrations_proposed/` — délibérément hors de `supabase/migrations/`**, pour qu'aucun `supabase db push` ne puisse jamais les appliquer par inadvertance ; chaque fichier reste un brouillon à lire et approuver individuellement. Numérotation logique de dépendance, pas nécessairement l'ordre d'exécution final (à reconfirmer au moment de l'application) :
+
+| # | Fichier | Contenu |
+|---|---|---|
+| 01 | `01_carbon_foundations_events_and_failures.sql` | Extension `btree_gist`, `carbon_business_events` (append-only, catalogue complet à 31 valeurs, colonne `verification_session_id` pour la portée MRV §10bis), `carbon_rpc_failures` (journal séparé, garantie limitée précisée en §11bis), `can_view_carbon_event(p_actor_id, p_organization_id, p_aggregator_id, p_verification_session_id)` (version de base sans lecture de table — récursion RLS évitée, étendue en migration 04), RLS des deux tables, révocations de privilèges par défaut, fonction `carbon_reject_update_delete()` (renommée avec préfixe de domaine pour éviter toute collision). |
+| 02 | `02_carbon_aggregator_memberships.sql` | `aggregator_memberships` historisée, `RESTRICT`, index unique partiel, RLS, `create_aggregator_with_primary_admin()`, `join_aggregator()`, `leave_aggregator()`, dépréciation de `organizations.aggregator_id`. |
+| 03 | `03_carbon_ccf_mrv_project_links.sql` | `ccf_mrv_project_links`, deux index uniques partiels, `RESTRICT`, RLS, `link_ccf_project_to_mrv()`, `unlink_ccf_project_from_mrv()`. |
+| 04 | `04_carbon_verification_outcomes.sql` | Altérations `verification_sessions` (périodes, `verifier_user_id`, `EXCLUDE ... USING gist`), `is_assigned_verifier()`, `verification_outcomes` (`status`/`supersedes_outcome_id`, modèle de supersession corrigé en §12 — référence arrière, plus de blocage circulaire), `complete_verification_session()` (conversion kg→tCO2e, arrondi réel documenté par la correction 1, séquence verrou→supersession→insertion), `CREATE OR REPLACE` de `can_view_carbon_event()` (même signature à 4 paramètres) pour activer la branche vérificateur assigné via `p_verification_session_id` (§10bis). |
+| 05 | `05_carbon_issuances.sql` | `credit_issuances` (`issuance_status` incluant `'voided'`, `aggregator_id`, registre externe, colonnes de preuve d'annulation externe `external_cancellation_date`/`reference`/`document_id` — portées par l'émission et non par le lot, §2 corrigé), `credit_issuance_sources` (contrainte différée + vérification amont de la correction 4), `create_credit_issuance()`, `void_credit_issuance()` (annulation interne sans preuve tant que `issuance_status NOT IN ('issued','externally_cancelled')`, preuve obligatoire sinon). |
+| 06 | `06_carbon_lots_commercial_cycle.sql` | Conversion `NUMERIC`, `credit_lots` (`commercial_status`, annulation externe désormais dépendante de `credit_issuances.issuance_status = 'externally_cancelled'` plutôt que portée localement), trigger de machine à états + verrou d'émission, `issue_credit_lot()` (verrou `FOR UPDATE`), `void_credit_lot()`. |
+| 07 | `07_carbon_sales_financial_model.sql` | `credit_sales`, `credit_sale_lots` (`UNIQUE` + interdiction stricte pré-émission, correction 2), `credit_sale_costs`, `credit_sale_adjustments`, cohérence des devises (correction 6), `distribution_rules` (append-only), `credit_sale_allocations` (`allocation_type`, `rule_snapshot`), `confirm_credit_sale()`. |
+
+Chaque migration est un fichier DDL autonome (contraintes, policies RLS, RPC, révocations de privilèges, section de rollback/désactivation en commentaire) — **les tests structurels et comportementaux vivent dans un fichier séparé**, sous `supabase/carbon_migrations_proposed/tests/`, un par migration (correction reçue après revue de la migration 01 : ne jamais mélanger DDL de migration et code de test dans le même fichier). **Aucun fichier n'est exécuté automatiquement — chacun attend une lecture et une approbation explicite avant toute application manuelle**, migration puis son test associé, dans cet ordre.
+
+Migration 01 (révision 4) et son script de test associé intègrent : les 8 corrections de la revue précédente — supersession de `verification_outcomes` corrigée (§12), garantie réelle et limitée de `carbon_rpc_failures` précisée (§11bis) et test B5 renommé en conséquence, contradiction de §11 corrigée, règle `issued`/`externally_cancelled` reformulée (§2), portée RLS MRV ajoutée via `can_view_carbon_event()` et `verification_session_id` (§10bis), catalogue `event_type` complété à 31 valeurs, fonction renommée `carbon_reject_update_delete()`, script de test qui échoue désormais bruyamment (`RAISE EXCEPTION`) dès qu'une assertion vaut `false` — et les 2 corrections ciblées de la dernière revue : `can_view_carbon_event()` ne relit plus `carbon_business_events` en interne (récursion RLS potentielle évitée, signature à 4 paramètres scalaires) et la table de test `_carbon_migration_test_results` est explicitement supprimée (`DROP TABLE`) en toute fin du script de test, après la porte de sortie bruyante. Prêts pour lecture et approbation (`01_carbon_foundations_events_and_failures.sql` et `tests/01_test_foundations_events_and_failures.sql`).
