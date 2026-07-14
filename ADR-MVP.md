@@ -1044,16 +1044,64 @@ Aucune migration, aucun changement de comportement RLS — correctif frontend pu
 
 ---
 
+## 9septricies. Gel formel de la version démo CCF
+
+**Contexte :** l'utilisateur a demandé de considérer la stabilisation et la préparation de la démonstration comme terminées, et d'officialiser un gel de cette version avant d'ouvrir le chantier carbone (Tranche 0). Sept points à confirmer et documenter : commit exact, migrations appliquées, résultat des tests automatisés, checklist opérationnelle, données de démonstration et procédure de réinitialisation, script narratif dans l'ordre exact, limitations/risques connus.
+
+**1. Commit exact de la version démo :** `366caeccb8665bb81ee30be05b01cbc4dd2c23bd` (court : `366caec`), confirmé via `git log -1 --oneline` et `git rev-parse HEAD` — `HEAD -> main, origin/main, origin/HEAD` tous alignés. Message : « Versionner les briefs Rocket S05/S07/S08 et le test S07 restes locaux + ignorer supabase/.temp ».
+
+**2. Migrations Supabase appliquées :** confirmé via `supabase migration list` — Local = Remote pour la totalité des migrations, la plus récente étant `20260713010000` (durcissement DT). Aucun écart entre l'état local et l'état distant au moment du gel.
+
+**3. Résultat des tests automatisés :** la suite référencée en §10 (`MetalTrace_MVP_Validation_Suite_v1_0.sql`, « 63/63 assertions passées ») s'est révélée **absente du dépôt** au moment de vérifier son existence (`Glob` exhaustif, aucune trace) — manifestement exécutée ad hoc dans une session antérieure sans jamais avoir été committée. Reconstruite intégralement pour ce gel : `supabase/tests/validation/MetalTrace_MVP_Validation_Suite_v2_0.sql` (committé, volontairement hors `supabase/migrations/`, ce n'est pas une migration de schéma).
+
+Trois itérations ont été nécessaires avant un résultat exploitable, chacune due à un comportement du SQL Editor Supabase et non à une erreur de logique métier :
+- Première version : `array_agg(enumlabel)` (type `name[]`) comparé à `ARRAY['admin','membre']` (`text[]`) — incompatibilité de type, corrigée par un cast explicite `::text`.
+- Deuxième version : `CREATE TEMP TABLE` suivie d'un `SELECT` final échouant avec `relation "validation_results" does not exist` — le SQL Editor Supabase peut exécuter un script multi-instructions sur des connexions différentes, et une table temporaire (portée session) ne survit pas à ce découpage.
+- Troisième tentative (bloc `DO $$ ... $$` unique avec `RAISE NOTICE`) : exécution réussie mais résultats invisibles — le Dashboard Supabase utilisé ne présente qu'un onglet « Results »/« Chart », aucun panneau Messages/Logs pour les notices Postgres.
+- **Version finale retenue :** table de résultats **permanente** (`public._ccf_validation_results`, utilitaire de test, pas une table métier, vidée par `TRUNCATE` à chaque exécution), Partie A en `INSERT ... SELECT` directs, Partie B en bloc `DO` avec données de test à UUID fixes et reconnaissables, nettoyées par des `DELETE` explicites (avant et après, par sécurité) plutôt que par un `ROLLBACK` global peu fiable dans ce contexte multi-connexions. Les résultats s'affichent comme de vrais `SELECT` dans l'onglet Results.
+
+**Résultat obtenu, exécuté le 13 juillet 2026 (soirée, Québec) contre l'unique environnement Supabase du projet (pas de staging séparé — confirmé par l'utilisateur), à l'état du commit `366caec` :**
+
+```
+total_assertions | total_reussies | total_echouees
+82                | 82              | 0
+```
+
+Détail : 72 assertions structurelles (Partie A — 16 tables existantes, 16 RLS activées, 12 fonctions utilitaires présentes, catalogue `mandate_actions` = 10, 14 valeurs critiques de `ccf_event_type`, 6 valeurs de `logistics_step_type`, `org_role` = {admin, membre}, contrainte `mandates_different_orgs`, contrainte `UNIQUE` sur `project_participants`, 4 triggers critiques) + 10 assertions comportementales (Partie B — rejet auto-mandat, mandat valide accepté, rejet action inconnue, rejet actions vide, unicité participant/projet, rejet phase invalide, rejet type d'étape invalide, acceptation type valide, rejet statut de capacité invalide, rejet profil opérationnel invalide). **Aucun échec.**
+
+**Limite à ne jamais perdre de vue en lisant ce résultat :** le script s'exécute avec le rôle `postgres` (propriétaire des tables), qui **contourne la RLS par défaut dans PostgreSQL**. Il valide la logique métier encodée dans les triggers et contraintes CHECK/UNIQUE (laquelle s'applique quel que soit le rôle), **pas** l'application réelle des policies RLS (quel rôle/utilisateur peut faire quoi). Cette validation-là a été faite séparément, manuellement, avec de vrais comptes authentifiés dans l'application (tests end-to-end documentés au fil des sections précédentes) — le script ne la remplace pas et ne prétend pas le faire.
+
+**4. Checklist opérationnelle complète de la démo :** `Script-Demo-CCF.md` — parcours pas à pas (~12-15 min), tableau des comptes de connexion, checklist pré-démo (onglet Documents vide après le reset — 2 options : pré-déposer un document ou le faire en direct), section « Pièges à éviter ».
+
+**5. Données de démonstration et procédure de réinitialisation :** documenté intégralement en §9quinquatricies — reset complet exécuté (`TRUNCATE` des tables métier CCF, réapplication de `supabase/seeds/demo_ccf.sql`, rattachement de `centredelasante@gmail.com` et `claudefairplay@hotmail.com` aux organisations du seed), validé en direct dans le navigateur. Procédure reproductible si un nouveau reset est nécessaire avant une démonstration future.
+
+**6. Script narratif, dans l'ordre exact des écrans et actions :** deux documents distincts, chacun avec un usage différent — `Script-Demo-CCF.md` (trame de clic-par-clic pour piloter soi-même la démo en direct) et `Script-Narration-Demo-CCF-Ministere-Partenaire.md` (texte de narration/voix off pour une vidéo générée par IA, même ordre d'écrans, ton factuel et chiffré, volet carbone explicitement présenté comme feuille de route et non comme fonctionnalité existante).
+
+**7. Limitations et risques connus, à ne pas déclencher pendant la démo :**
+- Le catalogue `mandate_actions` reste déclaratif — 9 des 10 actions ne sont vérifiées par aucune policy RLS (§9sextricies, décision : laisser tel quel). Ne pas présenter les mandats comme un contrôle d'accès granulaire fonctionnel : c'est un cadre de gouvernance/traçabilité, pas encore une autorisation technique fine.
+- L'onglet Documents est vide immédiatement après le reset de données (§9quinquatricies) — prévoir un pré-dépôt ou un dépôt en direct.
+- Le test RLS multi-comptes n'a jamais été étendu au-delà de `/mandats` (S06) — éviter de tester en direct, devant public, des scénarios RLS non déjà validés (changement de compte à un autre rôle non répété récemment).
+- La branche GitHub `rocket-update` (7 fichiers périmés rejetés en §9duovicies) reste ouverte sur GitHub sans avoir été fermée (item 15, §11) — sans impact sur la démo elle-même, mais à fermer pour l'hygiène du dépôt.
+- Fichiers Storage orphelins : le reset a vidé les lignes `documents` mais pas les fichiers déjà déposés dans le bucket Storage (§9quinquatricies) — inoffensif, mais à savoir si un nettoyage Storage est fait séparément plus tard.
+
+**Contrainte explicite de l'utilisateur, à respecter tant qu'aucune décision contraire n'est prise : Rocket demeure verrouillé — aucune migration, correction ou nouvelle fonctionnalité ne doit être intégrée à cette version sans décision explicite.**
+
+**État après cette session : gel formalisé sur les 7 points demandés. Le chantier carbone (Tranche 0 — conception/architecture uniquement) peut maintenant s'ouvrir, conformément à la séquence demandée par l'utilisateur.**
+
+---
+
 ## 10. Suite de validation automatisée
 
-Un script de validation (`MetalTrace_MVP_Validation_Suite_v1_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
+**Mise à jour du 13-14 juillet 2026 (voir §9septricies pour le détail complet) :** le fichier `MetalTrace_MVP_Validation_Suite_v1_0.sql` mentionné ci-dessous n'a jamais existé dans le dépôt — reconstruit sous un nouveau nom et chemin, `supabase/tests/validation/MetalTrace_MVP_Validation_Suite_v2_0.sql`, exécuté avec un résultat de **82/82 assertions passées, 0 échec**, à l'état du commit `366caec`.
 
-- **Partie A (structurelle)** — introspection du schéma (tables, contraintes, fonctions, triggers), lecture seule.
-- **Partie B (comportementale)** — crée des données de test temporaires et exécute réellement les transitions de la machine à états (§4), le rejet de mandat vide/invalide, le blocage de l'auto-candidature — le tout dans une transaction annulée (`ROLLBACK`) en fin de script.
+Un script de validation (`supabase/tests/validation/MetalTrace_MVP_Validation_Suite_v2_0.sql`) encode les décisions ci-dessus comme des assertions exécutables :
 
-**État au moment de la rédaction : 63/63 assertions passées.**
+- **Partie A (structurelle)** — introspection du schéma (tables, RLS, contraintes, fonctions, triggers, catalogues ENUM), lecture seule.
+- **Partie B (comportementale)** — crée des données de test (UUID fixes et reconnaissables) et exécute réellement les transitions de la machine à états (§4), le rejet de mandat vide/invalide, le blocage de l'auto-candidature, l'unicité participant/projet — nettoyées par des `DELETE` explicites en fin de script (voir §9septricies pour les raisons de ce choix plutôt qu'un `ROLLBACK` global).
 
-Limite connue du script : la Partie B valide la logique métier encodée dans les triggers, pas l'application des policies RLS elles-mêmes (le rôle propriétaire des tables contourne RLS par défaut) — un test RLS en tant que rôle `authenticated` réel reste à faire séparément si une validation plus stricte est requise avant une mise en production.
+**État actuel : 82/82 assertions passées, 0 échec** (exécution du 13-14 juillet 2026, détail en §9septricies).
+
+Limite connue du script : la Partie B valide la logique métier encodée dans les triggers, pas l'application des policies RLS elles-mêmes (le rôle propriétaire des tables contourne RLS par défaut) — un test RLS en tant que rôle `authenticated` réel reste à faire séparément si une validation plus stricte est requise avant une mise en production. Cette validation manuelle a déjà été faite au fil des sections précédentes (tests end-to-end avec de vrais comptes).
 
 ---
 
