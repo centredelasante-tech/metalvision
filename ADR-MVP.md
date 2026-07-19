@@ -1183,7 +1183,7 @@ Détail : 24 assertions structurelles (Partie A — table `aggregator_membership
 
 **Aucune donnée de test résiduelle** : le premier passage (échec B16) a été annulé intégralement par PostgreSQL (transaction implicite unique, aucune donnée de test n'a persisté) ; le second passage (post-correctif) a atteint sa porte de sortie normale, 56/56, et `_carbon_migration_test_results` a bien disparu.
 
-**Confirmation explicite : les migrations 04 à 07 n'ont pas été appliquées.** `supabase/carbon_migrations_proposed/` reste hors de `supabase/migrations/`.
+**Confirmation explicite (au moment de la migration 02) : les migrations 04 à 07 n'avaient pas encore été appliquées.** `supabase/carbon_migrations_proposed/` reste hors de `supabase/migrations/`. Voir §14 ci-dessous : 06 est depuis appliquée — seules 04, 05, 07, 08 et 09 restent non appliquées.
 
 ---
 
