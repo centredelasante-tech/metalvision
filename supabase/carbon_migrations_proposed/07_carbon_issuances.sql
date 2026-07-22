@@ -701,8 +701,21 @@ AS $$
         SELECT 1
         FROM public.verification_outcomes vo
         JOIN public.verification_sessions vs ON vs.id = vo.verification_session_id
+        -- RÉCONCILIATION 04->07 (passage unique, après validation réelle de 04
+        -- ET 05 — voir « CONTRAT OUVERT VERS 07 » en en-tête de
+        -- 04_carbon_ccf_mrv_project_links.sql) : AND link.ended_at IS NULL
+        -- ajouté — un lien ROMPU (ended_at renseigné) ne doit plus suffire à
+        -- valider une organisation source, même défaut de principe que celui
+        -- déjà corrigé pour project_participants.status ci-dessous (correction
+        -- 1, huitième revue statique). 04 garantit désormais structurellement
+        -- (deux index uniques partiels WHERE ended_at IS NULL, symétriques sur
+        -- ccf_project_id ET mrv_project_id) qu'au plus UN lien effectif existe
+        -- par projet à tout instant — l'option (a) du contrat, qui élimine
+        -- aussi l'ambiguïté de verrouillage évoquée plus bas pour
+        -- carbon_lock_and_validate_source_organization().
         LEFT JOIN public.ccf_mrv_project_links link
-               ON link.ccf_project_id = vs.project_id OR link.mrv_project_id = vs.project_id
+               ON (link.ccf_project_id = vs.project_id OR link.mrv_project_id = vs.project_id)
+              AND link.ended_at IS NULL
         -- Branche CCF : project_participants.project_id (schéma confirmé).
         -- (correction 1, huitième revue statique) : status='active' exigé —
         -- une ligne 'invited' (pas encore acceptée), 'declined' ou 'removed'
@@ -763,12 +776,21 @@ DECLARE
     v_mrv_project_id      UUID;
     v_operational_unit_id UUID;
 BEGIN
+    -- RÉCONCILIATION 04->07 (passage unique, voir « CONTRAT OUVERT VERS 07 »
+    -- en en-tête de 04_carbon_ccf_mrv_project_links.sql) : AND link.ended_at
+    -- IS NULL ajouté, même motif que carbon_is_source_organization_valid()
+    -- ci-dessus — un lien rompu ne doit plus être pris en compte. Ceci
+    -- résout aussi l'ambiguïté de verrouillage documentée dans le
+    -- commentaire ci-dessus (SELECT INTO prenant la première ligne trouvée) :
+    -- 04 garantit désormais qu'au plus une ligne satisfait cette jointure par
+    -- projet (deux index uniques partiels WHERE ended_at IS NULL).
     SELECT COALESCE(link.ccf_project_id, vs.project_id), COALESCE(link.mrv_project_id, vs.project_id)
     INTO v_ccf_project_id, v_mrv_project_id
     FROM public.verification_outcomes vo
     JOIN public.verification_sessions vs ON vs.id = vo.verification_session_id
     LEFT JOIN public.ccf_mrv_project_links link
-           ON link.ccf_project_id = vs.project_id OR link.mrv_project_id = vs.project_id
+           ON (link.ccf_project_id = vs.project_id OR link.mrv_project_id = vs.project_id)
+          AND link.ended_at IS NULL
     WHERE vo.id = p_verification_outcome_id;
 
     IF v_ccf_project_id IS NULL AND v_mrv_project_id IS NULL THEN

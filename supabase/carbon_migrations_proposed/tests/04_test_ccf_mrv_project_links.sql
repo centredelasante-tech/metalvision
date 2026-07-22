@@ -49,6 +49,22 @@ CREATE TABLE public._carbon_migration_test_results (
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Correctif exécution réelle : plusieurs tests basculent délibérément
+-- SET LOCAL ROLE authenticated pour exercer le chemin RLS réel. Le rôle
+-- `postgres` (propriétaire, celui qui exécute ce script) a implicitement
+-- tous les droits sur cette table éphémère, mais la table ET sa séquence
+-- SERIAL sous-jacente ne sont PAS automatiquement accessibles à
+-- `authenticated` (contrairement aux tables de l'application, couvertes par
+-- ALTER DEFAULT PRIVILEGES côté Supabase) — carbon_test_assert()/
+-- carbon_test_assert_raises() y insèrent pourtant depuis N'IMPORTE quel
+-- rôle simulé. Sans ce GRANT explicite, tout test exécuté sous authenticated
+-- échoue sur "permission denied for sequence ..._id_seq" au moment
+-- d'ENREGISTRER le résultat, pas sur le test lui-même. Portée strictement
+-- locale à ce script : la table (et donc ce GRANT) est annulée par le
+-- ROLLBACK final, sans aucun effet permanent.
+GRANT SELECT, INSERT ON public._carbon_migration_test_results TO authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public._carbon_migration_test_results_id_seq TO authenticated;
+
 CREATE OR REPLACE FUNCTION pg_temp.carbon_test_assert(
     p_section TEXT, p_assertion TEXT, p_condition BOOLEAN, p_detail TEXT DEFAULT NULL
 ) RETURNS VOID LANGUAGE plpgsql AS $$
@@ -78,6 +94,19 @@ BEGIN
 END;
 $$;
 
+-- Correctif exécution réelle (blocage découvert à l'exécution, pas
+-- détectable par pglast) : is_platform_superadmin()/is_project_admin()
+-- (migrations 06/antérieures, déjà en production) évaluent
+-- `(auth.jwt()->'app_metadata'->>'role') = 'admin'` (ou IN (...)) SANS
+-- COALESCE — si la clé 'role' est ABSENTE de app_metadata (et non simplement
+-- différente de 'admin'), le résultat est NULL, pas FALSE. `IF NOT
+-- is_platform_superadmin() THEN RAISE EXCEPTION` échoue alors OUVERT :
+-- NOT NULL = NULL, la branche ne s'exécute jamais. La branche p_superadmin=
+-- false fournissait auparavant un app_metadata VIDE ({}), tombant
+-- exactement dans ce piège pour tout acteur "non privilégié" simulé — d'où
+-- B3/B4 (04) et par extension B32 (05) qui échoueraient de la même façon.
+-- 'role' explicitement renseigné (jamais 'admin'/'project_admin') pour
+-- garantir un résultat booléen défini, pas une absence de clé.
 CREATE OR REPLACE FUNCTION pg_temp.carbon_test_set_actor(p_user_id UUID, p_superadmin BOOLEAN DEFAULT false) RETURNS VOID
 LANGUAGE sql AS $$
     SELECT set_config(
@@ -85,7 +114,7 @@ LANGUAGE sql AS $$
         jsonb_build_object(
             'sub', p_user_id::text,
             'role', 'authenticated',
-            'app_metadata', CASE WHEN p_superadmin THEN jsonb_build_object('role', 'admin') ELSE jsonb_build_object() END
+            'app_metadata', CASE WHEN p_superadmin THEN jsonb_build_object('role', 'admin') ELSE jsonb_build_object('role', 'user') END
         )::text,
         true
     );
@@ -151,6 +180,25 @@ BEGIN
         AND NOT has_table_privilege('authenticated', 'public.ccf_mrv_project_links', 'DELETE'));
     PERFORM pg_temp.carbon_test_assert('A11', 'unlink_ccf_project_from_mrv() verrouille la ligne (FOR UPDATE) avant transition',
         pg_get_functiondef('public.unlink_ccf_project_from_mrv(uuid,text)'::regprocedure) ILIKE '%FOR UPDATE%');
+    -- Correctif vingtième revue statique (blocage temporel) : trigger de
+    -- forçage BEFORE INSERT + deux contraintes EXCLUDE anti-chevauchement.
+    PERFORM pg_temp.carbon_test_assert('A12', 'trigger BEFORE INSERT de forçage started_at/created_at présent',
+        EXISTS (SELECT 1 FROM pg_trigger tg JOIN pg_class t ON t.oid = tg.tgrelid
+                WHERE t.relname = 'ccf_mrv_project_links' AND tg.tgname = 'ccf_mrv_project_links_force_insert_timestamps'));
+    PERFORM pg_temp.carbon_test_assert('A13', 'deux contraintes EXCLUDE anti-chevauchement (ccf_project_id, mrv_project_id) présentes',
+        EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'ccf_mrv_project_links' AND c.contype = 'x' AND c.conname = 'ccf_mrv_project_links_no_overlapping_ccf')
+        AND EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'ccf_mrv_project_links' AND c.contype = 'x' AND c.conname = 'ccf_mrv_project_links_no_overlapping_mrv'));
+    -- Durcissements non bloquants (vingt-et-unième revue statique).
+    PERFORM pg_temp.carbon_test_assert('A14', 'started_by est NOT NULL',
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='ccf_mrv_project_links'
+                  AND column_name='started_by' AND is_nullable='NO'));
+    PERFORM pg_temp.carbon_test_assert('A15', 'CHECK cohérence ended_at/ended_by présent',
+        EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'ccf_mrv_project_links' AND c.contype = 'c'
+                  AND c.conname = 'ccf_mrv_project_links_ended_at_by_coherent'));
 END $$;
 
 -- ────────────────────────────────────────────────────────────
@@ -176,10 +224,10 @@ VALUES
     ('22222222-2222-2222-2222-222222224801', '22222222-2222-2222-2222-222222224700', 'TEST-04 Projet CCF A', '22222222-2222-2222-2222-222222224101'),
     ('22222222-2222-2222-2222-222222224802', '22222222-2222-2222-2222-222222224701', 'TEST-04 Projet CCF B', '22222222-2222-2222-2222-222222224103');
 
-INSERT INTO public.operational_units (id, organization_id)
+INSERT INTO public.operational_units (id, organization_id, name)
 VALUES
-    ('22222222-2222-2222-2222-222222224901', '22222222-2222-2222-2222-222222224102'),
-    ('22222222-2222-2222-2222-222222224902', '22222222-2222-2222-2222-222222224104');
+    ('22222222-2222-2222-2222-222222224901', '22222222-2222-2222-2222-222222224102', 'TEST-04 Unite Operationnelle 1'),
+    ('22222222-2222-2222-2222-222222224902', '22222222-2222-2222-2222-222222224104', 'TEST-04 Unite Operationnelle 2');
 
 INSERT INTO public.projects (id, operational_unit_id, name)
 VALUES
@@ -206,8 +254,8 @@ VALUES
     ('22222222-2222-2222-2222-222222224821', '22222222-2222-2222-2222-222222224803', '22222222-2222-2222-2222-222222224113', 'active'),
     ('22222222-2222-2222-2222-222222224822', '22222222-2222-2222-2222-222222224803', '22222222-2222-2222-2222-222222224114', 'invited');
 
-INSERT INTO public.operational_units (id, organization_id)
-VALUES ('22222222-2222-2222-2222-222222224903', '22222222-2222-2222-2222-222222224112');
+INSERT INTO public.operational_units (id, organization_id, name)
+VALUES ('22222222-2222-2222-2222-222222224903', '22222222-2222-2222-2222-222222224112', 'TEST-04 Unite Operationnelle RLS');
 
 INSERT INTO public.projects (id, operational_unit_id, name)
 VALUES ('22222222-2222-2222-2222-222222225003', '22222222-2222-2222-2222-222222224903', 'TEST-04 Projet MRV RLS');
@@ -340,13 +388,19 @@ END $$;
 
 DO $$
 BEGIN
+    -- started_by (NOT NULL, durcissement vingt-et-unième revue statique)
+    -- doit être fourni même dans ces INSERT directs délibérément invalides
+    -- pour le motif VISÉ (index unique partiel) — sinon l'INSERT échoue
+    -- plus tôt sur la contrainte NOT NULL, masquant le test réellement ciblé
+    -- (constaté à l'exécution réelle, pglast ne valide pas les contraintes
+    -- runtime).
     PERFORM pg_temp.carbon_test_assert_raises('B11', 'INSERT direct : second lien effectif pour le même ccf_project_id rejeté (index unique partiel)',
-        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id) VALUES (%L, %L)$sql$,
-               '22222222-2222-2222-2222-222222224801', '22222222-2222-2222-2222-222222225002'),
+        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id, started_by) VALUES (%L, %L, %L)$sql$,
+               '22222222-2222-2222-2222-222222224801', '22222222-2222-2222-2222-222222225002', pg_temp.carbon_test_profile('superadmin')),
         'idx_ccf_mrv_project_links_one_active_per_ccf');
     PERFORM pg_temp.carbon_test_assert_raises('B12', 'INSERT direct : second lien effectif pour le même mrv_project_id rejeté (index unique partiel)',
-        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id) VALUES (%L, %L)$sql$,
-               '22222222-2222-2222-2222-222222224802', '22222222-2222-2222-2222-222222225001'),
+        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id, started_by) VALUES (%L, %L, %L)$sql$,
+               '22222222-2222-2222-2222-222222224802', '22222222-2222-2222-2222-222222225001', pg_temp.carbon_test_profile('superadmin')),
         'idx_ccf_mrv_project_links_one_active_per_mrv');
 END $$;
 
@@ -389,6 +443,11 @@ BEGIN
         v_returned_id::text = current_setting('carbon_test.link_a', true)
         AND v_ended_at IS NOT NULL AND v_ended_by = pg_temp.carbon_test_profile('superadmin'));
 
+    -- Persisté pour B20 (correctif vingtième revue statique) : vérifier que
+    -- le nouveau lien démarre bien APRÈS (ou au même instant, jamais avant)
+    -- la fin réelle de celui-ci.
+    PERFORM set_config('carbon_test.link_a_ended_at', v_ended_at::text, false);
+
     PERFORM pg_temp.carbon_test_assert('B16', 'événement ccf_mrv_link_ended journalisé avec end_reason',
         EXISTS (
             SELECT 1 FROM public.carbon_business_events
@@ -422,7 +481,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_relink_id UUID;
+    v_relink_id      UUID;
+    v_relink_started TIMESTAMPTZ;
 BEGIN
     -- Le ccf_project_id A est désormais libre (index partiel exclut les
     -- lignes ended_at NON NULL) — un nouveau lien vers un AUTRE projet MRV
@@ -431,8 +491,47 @@ BEGIN
     v_relink_id := public.link_ccf_project_to_mrv('22222222-2222-2222-2222-222222224801', '22222222-2222-2222-2222-222222225002');
     PERFORM pg_temp.carbon_test_clear_actor();
 
-    PERFORM pg_temp.carbon_test_assert('B20', 'un nouveau lien effectif peut être établi pour le même ccf_project_id après rupture du précédent',
-        v_relink_id IS NOT NULL AND v_relink_id::text <> current_setting('carbon_test.link_a', true));
+    SELECT started_at INTO v_relink_started FROM public.ccf_mrv_project_links WHERE id = v_relink_id;
+
+    -- Correctif vingtième revue statique : avant le forçage BEFORE INSERT,
+    -- ce test réussissait déjà (v_relink_id différent de link_a) mais
+    -- DÉMONTRAIT en réalité le chevauchement (started_at figé à now() en
+    -- début de transaction, donc antérieur à ended_at réel de link_a). La
+    -- condition temporelle explicite ci-dessous est la correction : le
+    -- trigger de forçage garantit désormais started_at >= ended_at réel.
+    PERFORM pg_temp.carbon_test_assert('B20', 'un nouveau lien effectif peut être établi pour le même ccf_project_id après rupture du précédent, SANS chevaucher (started_at >= ended_at réel de l''ancien)',
+        v_relink_id IS NOT NULL
+        AND v_relink_id::text <> current_setting('carbon_test.link_a', true)
+        AND v_relink_started >= current_setting('carbon_test.link_a_ended_at', true)::timestamptz,
+        format('relink.started_at=%s, ancien.ended_at=%s', v_relink_started, current_setting('carbon_test.link_a_ended_at', true)));
+END $$;
+
+-- ────────────────────────────────────────────────────────────
+-- 7bis. CONTRE-ÉPREUVE EXCLUDE — un INSERT direct (hors RPC) portant un
+--    ended_at déjà renseigné (lien « historique » construit directement)
+--    peut chevaucher un lien encore actif SANS violer l'index unique partiel
+--    (WHERE ended_at IS NULL ne s'applique pas à cette ligne) — c'est
+--    précisément la lacune comblée par les deux contraintes EXCLUDE
+--    (correctif vingtième revue statique). Le lien relink (ccf_project_id A,
+--    mrv_project_id 5002) est actif ([started_at, +infini[) depuis B20.
+-- ────────────────────────────────────────────────────────────
+
+DO $$
+BEGIN
+    -- started_by (NOT NULL) fourni pour le même motif que B11/B12. ended_by
+    -- doit être fourni EN MÊME TEMPS que ended_at (CHECK
+    -- ccf_mrv_project_links_ended_at_by_coherent, durcissement vingt-et-unième
+    -- revue statique) — sinon l'INSERT échoue plus tôt sur ce CHECK, masquant
+    -- le test réellement ciblé (EXCLUDE anti-chevauchement) — constaté à
+    -- l'exécution réelle, pglast ne valide pas les contraintes runtime.
+    PERFORM pg_temp.carbon_test_assert_raises('B20bis', 'INSERT direct : lien historique (ended_at renseigné) chevauchant un lien actif sur le même ccf_project_id rejeté (EXCLUDE, pas l''index partiel)',
+        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id, started_by, ended_at, ended_by) VALUES (%L, %L, %L, clock_timestamp() + interval '1 day', %L)$sql$,
+               '22222222-2222-2222-2222-222222224801', '22222222-2222-2222-2222-222222225001', pg_temp.carbon_test_profile('superadmin'), pg_temp.carbon_test_profile('superadmin')),
+        'ccf_mrv_project_links_no_overlapping_ccf');
+    PERFORM pg_temp.carbon_test_assert_raises('B20ter', 'INSERT direct : lien historique (ended_at renseigné) chevauchant un lien actif sur le même mrv_project_id rejeté (EXCLUDE, pas l''index partiel)',
+        format($sql$INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id, started_by, ended_at, ended_by) VALUES (%L, %L, %L, clock_timestamp() + interval '1 day', %L)$sql$,
+               '22222222-2222-2222-2222-222222224802', '22222222-2222-2222-2222-222222225002', pg_temp.carbon_test_profile('superadmin'), pg_temp.carbon_test_profile('superadmin')),
+        'ccf_mrv_project_links_no_overlapping_mrv');
 END $$;
 
 -- ────────────────────────────────────────────────────────────
@@ -561,25 +660,27 @@ BEGIN
     INTO v_total, v_distinct, v_failed
     FROM public._carbon_migration_test_results;
 
-    IF v_total <> 38 THEN
-        RAISE EXCEPTION 'GATE ÉCHOUÉ : % assertions exécutées, 38 attendues (test manquant, label dupliqué, ou bloc non exécuté).', v_total;
+    IF v_total <> 44 THEN
+        RAISE EXCEPTION 'GATE ÉCHOUÉ : % assertions exécutées, 44 attendues (test manquant, label dupliqué, ou bloc non exécuté).', v_total;
     END IF;
 
-    IF v_distinct <> 38 THEN
-        RAISE EXCEPTION 'GATE ÉCHOUÉ : % labels DISTINCTS sur % lignes totales (38 attendus pour les deux) — un label a été exécuté plus d''une fois, masquant potentiellement un test jamais atteint.', v_distinct, v_total;
+    IF v_distinct <> 44 THEN
+        RAISE EXCEPTION 'GATE ÉCHOUÉ : % labels DISTINCTS sur % lignes totales (44 attendus pour les deux) — un label a été exécuté plus d''une fois, masquant potentiellement un test jamais atteint.', v_distinct, v_total;
     END IF;
 
     IF v_failed <> 0 THEN
-        RAISE EXCEPTION 'GATE ÉCHOUÉ : % assertion(s) sur 38 ont échoué (0 attendu). Voir le résumé détaillé ci-dessous pour l''identification.', v_failed;
+        RAISE EXCEPTION 'GATE ÉCHOUÉ : % assertion(s) sur 44 ont échoué (0 attendu). Voir le résumé détaillé ci-dessous pour l''identification.', v_failed;
     END IF;
 END $$;
 
 -- ────────────────────────────────────────────────────────────
 -- 11. RÉSUMÉ — affiché AVANT le ROLLBACK.
 --     NOMBRE D'ASSERTIONS ATTENDU (recompté mécaniquement, script Python
---     regex + Counter, même discipline que tests/07) : 38 — 11 prévalidations
---     (A1-A11) + 27 tests comportementaux (B1-B27), tous labels distincts,
---     aucun doublon.
+--     regex + Counter, même discipline que tests/07) : 44 — 15 prévalidations
+--     (A1-A15) + 29 tests comportementaux (B1-B27 + B20bis + B20ter), tous
+--     labels distincts, aucun doublon. Vingt-et-unième revue statique :
+--     validation statique favorable, +2 prévalidations non bloquantes
+--     (A14/A15 : started_by NOT NULL, cohérence ended_at/ended_by).
 -- ────────────────────────────────────────────────────────────
 
 SELECT

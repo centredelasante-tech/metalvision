@@ -67,6 +67,11 @@
 --      qu'au plus UN lien effectif existe à la fois par ccf_project_id ET par
 --      mrv_project_id — voir « CONTRAT OUVERT VERS 07 » ci-dessous, c'est
 --      précisément la garantie que 07 attend).
+--   1bis. Trigger BEFORE INSERT forçant started_at/created_at à un seul
+--      clock_timestamp() (correctif vingtième revue statique, voir en-tête).
+--   1ter. Deux contraintes EXCLUDE USING gist protégeant l'ABSENCE de
+--      chevauchement historique, pas seulement l'état courant (correctif
+--      vingtième revue statique, voir en-tête).
 --   2. Trigger de garde sur UPDATE (seule transition permise : ended_at de
 --      NULL vers une valeur, aucune autre colonne modifiable) + réutilisation
 --      de carbon_reject_update_delete() (migration 01) pour interdire tout
@@ -115,6 +120,35 @@
 --       (script de test, ou séquence applicative rapide) doit rester valide.
 --       unlink_ccf_project_from_mrv() utilise clock_timestamp() pour
 --       ended_at, comme leave_aggregator().
+--
+-- CORRECTIF VINGTIÈME REVUE STATIQUE (20 juillet 2026) — BLOCAGE TEMPOREL
+-- CORRIGÉ : les deux index uniques partiels garantissent bien qu'au plus UN
+-- lien effectif (ended_at IS NULL) existe à la fois par ccf_project_id ET par
+-- mrv_project_id, mais ne garantissaient PAS l'absence de chevauchement
+-- HISTORIQUE — un lien créé avec started_at = now() (figé au DÉBUT de la
+-- transaction), puis rompu avec ended_at = clock_timestamp() (l'horloge
+-- réelle), puis un nouveau lien recréé dans la MÊME transaction recevait de
+-- nouveau started_at = now(), donc rétroactivement AVANT la fin réelle de
+-- l'ancien lien — chevauchement démontré par le test B20 lui-même (voir
+-- tests/04). Corrigé par :
+--   (a) un trigger BEFORE INSERT (carbon_force_ccf_mrv_project_link_timestamps,
+--       section 1bis) qui fixe started_at ET created_at à un SEUL et même
+--       clock_timestamp() lu une fois, sans jamais faire confiance à une
+--       valeur fournie par l'appelant (même patron que le forçage de
+--       created_at sur credit_issuances, migration 07, seizième revue
+--       statique) ;
+--   (b) deux contraintes EXCLUDE USING gist (section 1ter) sur
+--       tstzrange(started_at, ended_at, '[)'), une par ccf_project_id et une
+--       par mrv_project_id, qui protègent TOUTE l'histoire (pas seulement le
+--       lien courant) — btree_gist (déjà installée par la migration 01)
+--       fournit l'opérateur d'égalité UUID nécessaire pour coexister avec
+--       l'opérateur && (chevauchement) de range dans une même contrainte
+--       GiST, même patron que verification_sessions_no_overlapping_completed_periods
+--       (migration 05). Les deux index uniques partiels sont CONSERVÉS : ils
+--       restent le filet de recherche/pré-vérification rapide du lien
+--       courant et continuent de satisfaire le contrat réclamé par 07 ; les
+--       contraintes GiST sont un durcissement supplémentaire, pas un
+--       remplacement.
 --
 -- CONTRAT OUVERT VERS 07 (à honorer explicitement lors du passage unique de
 -- réconciliation prévu après validation de 04 ET 05, PAS dans ce fichier) :
@@ -189,6 +223,12 @@ BEGIN
         RAISE EXCEPTION 'Prévalidation échouée : public.carbon_reject_update_delete() introuvable — la migration 01 a-t-elle été appliquée ?';
     END IF;
 
+    -- Correctif vingtième revue statique (voir en-tête) : requise par les
+    -- deux contraintes EXCLUDE USING gist de la section 1ter.
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'btree_gist') THEN
+        RAISE EXCEPTION 'Prévalidation échouée : extension btree_gist introuvable — requise par les EXCLUDE USING gist de la section 1ter (la migration 01 a-t-elle été appliquée ?).';
+    END IF;
+
     IF to_regclass('public.ccf_projects') IS NULL THEN
         RAISE EXCEPTION 'Prévalidation échouée : public.ccf_projects introuvable (chantier CCF antérieur).';
     END IF;
@@ -258,14 +298,23 @@ CREATE TABLE public.ccf_mrv_project_links (
     mrv_project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE RESTRICT,
     started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at       TIMESTAMPTZ NULL,
-    started_by     UUID REFERENCES public.profiles(id) ON DELETE RESTRICT,
+    -- Durcissement non bloquant (vingt-et-unième revue statique) : NOT NULL —
+    -- link_ccf_project_to_mrv() fournit toujours auth.uid() (vérifié non NULL
+    -- plus haut dans la RPC), aucun lien ne devrait jamais exister sans son
+    -- auteur.
+    started_by     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     ended_by       UUID REFERENCES public.profiles(id) ON DELETE RESTRICT,
     end_reason     TEXT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Décision D4 (voir en-tête) : >= et non >, même motif que la décision D8
     -- de la migration 02 (now() stable pendant toute la transaction).
     CONSTRAINT ccf_mrv_project_links_ended_after_started
-        CHECK (ended_at IS NULL OR ended_at >= started_at)
+        CHECK (ended_at IS NULL OR ended_at >= started_at),
+    -- Durcissement non bloquant (vingt-et-unième revue statique) : ended_at et
+    -- ended_by transitionnent toujours ENSEMBLE (unlink_ccf_project_from_mrv()
+    -- les renseigne dans la même UPDATE) — jamais l'un sans l'autre.
+    CONSTRAINT ccf_mrv_project_links_ended_at_by_coherent
+        CHECK ((ended_at IS NULL AND ended_by IS NULL) OR (ended_at IS NOT NULL AND ended_by IS NOT NULL))
 );
 
 COMMENT ON TABLE public.ccf_mrv_project_links IS
@@ -290,6 +339,71 @@ CREATE UNIQUE INDEX idx_ccf_mrv_project_links_one_active_per_mrv
 
 CREATE INDEX idx_ccf_mrv_project_links_ccf ON public.ccf_mrv_project_links (ccf_project_id);
 CREATE INDEX idx_ccf_mrv_project_links_mrv ON public.ccf_mrv_project_links (mrv_project_id);
+
+-- ────────────────────────────────────────────────────────────
+-- 1bis. FORÇAGE TEMPOREL (BEFORE INSERT) — correctif vingtième revue statique
+--    (voir en-tête). started_at/created_at ne doivent JAMAIS provenir d'une
+--    valeur fournie par l'appelant (colonne DEFAULT now() seulement comme
+--    filet si le trigger était un jour désactivé) — un seul clock_timestamp()
+--    lu UNE fois, appliqué identiquement aux deux colonnes. Même patron que
+--    le forçage de created_at sur credit_issuances (migration 07).
+-- ────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.carbon_force_ccf_mrv_project_link_timestamps()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_now TIMESTAMPTZ := clock_timestamp();
+BEGIN
+    NEW.started_at := v_now;
+    NEW.created_at := v_now;
+    RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.carbon_force_ccf_mrv_project_link_timestamps() IS
+  'Force started_at ET created_at à un seul et même clock_timestamp() lu une '
+  'fois à l''INSERT, indépendamment de toute valeur fournie par l''appelant — '
+  'corrige le chevauchement historique possible quand started_at restait figé '
+  'à now() (début de transaction) pendant qu''ended_at (unlink) utilisait '
+  'clock_timestamp() (horloge réelle) dans la même transaction (vingtième '
+  'revue statique, voir en-tête).';
+
+CREATE TRIGGER ccf_mrv_project_links_force_insert_timestamps
+    BEFORE INSERT ON public.ccf_mrv_project_links
+    FOR EACH ROW EXECUTE FUNCTION public.carbon_force_ccf_mrv_project_link_timestamps();
+
+-- ────────────────────────────────────────────────────────────
+-- 1ter. EXCLUSION ANTI-CHEVAUCHEMENT HISTORIQUE (EXCLUDE USING gist) —
+--    correctif vingtième revue statique (voir en-tête). Les index uniques
+--    partiels ci-dessus ne couvrent QUE les lignes ended_at IS NULL (le lien
+--    courant) ; un INSERT direct portant un ended_at déjà renseigné (lien
+--    « historique » construit directement, hors RPC) pouvait donc chevaucher
+--    un lien encore actif sans violer aucun index — ces deux contraintes
+--    protègent TOUTE l'histoire, pas seulement l'état courant. btree_gist
+--    (prévalidée section 0) fournit l'opérateur d'égalité UUID nécessaire
+--    pour coexister avec && (chevauchement) dans une contrainte GiST unique —
+--    même patron que verification_sessions_no_overlapping_completed_periods
+--    (migration 05). ended_at NULL représente un intervalle non borné
+--    ([started_at, +infini[) : tstzrange(started_at, ended_at, '[)') gère ce
+--    cas nativement (borne supérieure NULL = illimitée).
+-- ────────────────────────────────────────────────────────────
+
+ALTER TABLE public.ccf_mrv_project_links
+    ADD CONSTRAINT ccf_mrv_project_links_no_overlapping_ccf
+    EXCLUDE USING gist (
+        ccf_project_id WITH =,
+        tstzrange(started_at, ended_at, '[)') WITH &&
+    );
+
+ALTER TABLE public.ccf_mrv_project_links
+    ADD CONSTRAINT ccf_mrv_project_links_no_overlapping_mrv
+    EXCLUDE USING gist (
+        mrv_project_id WITH =,
+        tstzrange(started_at, ended_at, '[)') WITH &&
+    );
 
 -- ────────────────────────────────────────────────────────────
 -- 2. IMMUTABILITÉ — trigger de garde (UPDATE) + réutilisation du rejet
@@ -539,5 +653,9 @@ COMMIT;
 -- DROP TRIGGER IF EXISTS ccf_mrv_project_links_reject_delete ON public.ccf_mrv_project_links;
 -- DROP TRIGGER IF EXISTS ccf_mrv_project_links_guard_update ON public.ccf_mrv_project_links;
 -- DROP FUNCTION IF EXISTS public.carbon_guard_ccf_mrv_project_link_update();
+-- ALTER TABLE public.ccf_mrv_project_links DROP CONSTRAINT IF EXISTS ccf_mrv_project_links_no_overlapping_mrv;
+-- ALTER TABLE public.ccf_mrv_project_links DROP CONSTRAINT IF EXISTS ccf_mrv_project_links_no_overlapping_ccf;
+-- DROP TRIGGER IF EXISTS ccf_mrv_project_links_force_insert_timestamps ON public.ccf_mrv_project_links;
+-- DROP FUNCTION IF EXISTS public.carbon_force_ccf_mrv_project_link_timestamps();
 -- DROP TABLE IF EXISTS public.ccf_mrv_project_links;
 -- ============================================================

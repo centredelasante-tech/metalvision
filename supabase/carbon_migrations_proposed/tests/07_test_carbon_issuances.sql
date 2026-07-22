@@ -167,12 +167,20 @@ $$;
 -- silencieusement (aucune erreur SQL, `pglast` ne peut pas détecter une
 -- regex sémantiquement fausse mais syntaxiquement valide). La véritable
 -- frontière de mot PostgreSQL est `\y` (§9.7.3.5, « constraint escapes »).
+-- Correctif exécution réelle : {0,400} dépassait DUPMAX (borne de répétition
+-- {m,n} plafonnée à 255 par le moteur regex de PostgreSQL — cf. doc
+-- PostgreSQL §9.7.3.1) — "invalid repetition count(s)" à l'exécution réelle,
+-- invisible à pglast (validation syntaxique du SQL, pas du contenu d'une
+-- chaîne littérale regex). La borne numérique n'apportait de toute façon
+-- rien : [^;] exclut déjà ';', ce qui borne intrinsèquement le motif à une
+-- seule instruction SQL. [^;]* (illimité mais toujours borné par ';')
+-- préserve exactement la même sémantique sans plafond artificiel.
 CREATE OR REPLACE FUNCTION pg_temp.carbon_test_has_scoped_lock(
     p_regprocedure TEXT, p_table TEXT, p_lock_mode TEXT
 ) RETURNS BOOLEAN
 LANGUAGE sql AS $$
     SELECT pg_temp.carbon_test_strip_comments(pg_get_functiondef(p_regprocedure::regprocedure))
-           ~* ('public\.' || p_table || '\y[^;]{0,400}\y' || p_lock_mode || '\y')
+           ~* ('public\.' || p_table || '\y[^;]*\y' || p_lock_mode || '\y')
 $$;
 
 -- ────────────────────────────────────────────────────────────
@@ -372,15 +380,18 @@ VALUES ('11111111-1111-1111-1111-111111111201', 'TEST-07 Regroupement');
 -- vers opportunities(id), schéma confirmé
 -- 20260710004000_ccf_004_capabilities_opportunities.sql) — une opportunité
 -- de test minimale est donc également nécessaire, avant le projet.
--- RÉCONCILIATION DU CHEMIN PROJET (migrations 04/05, toujours non
--- rédigées) : verification_sessions.project_id (fixtures ci-dessous)
--- référence désormais ce MÊME id de ccf_projects réel, garantissant que
--- project_participants (branche CCF) et verification_sessions (branche
--- consommée par carbon_is_source_organization_valid()) pointent vers UNE
--- SEULE source de vérité cohérente — reste néanmoins une hypothèse tant que
--- 05 ne confirme pas explicitement le type de vs.project_id (ccf_projects
--- directement, ou via ccf_mrv_project_links comme la fonction le permet
--- déjà par ses deux branches LEFT JOIN).
+-- RÉCONCILIATION DU CHEMIN PROJET — TRANCHÉE PAR L'EXÉCUTION RÉELLE (04/05
+-- désormais appliquées) : project_participants (branche CCF) référence bien
+-- ce ccf_projects '...701'. En revanche verification_sessions.project_id
+-- porte une FK RÉELLE vers public.projects (MRV) — jamais vers ccf_projects
+-- directement (confirmé par lecture du schéma appliqué). Les sessions
+-- S1-S6/S9/S10 référencent donc désormais un projet MRV DÉDIÉ ('...111904',
+-- voir plus bas), relié à '...701' par un vrai ccf_mrv_project_links
+-- (migration 04) — c'est cette liaison, et non une identité directe des
+-- deux id, qui fait converger project_participants et verification_sessions
+-- vers UNE SEULE source de vérité, via la branche CCF de
+-- carbon_is_source_organization_valid()/carbon_lock_and_validate_source_organization()
+-- (COALESCE(link.ccf_project_id, vs.project_id)).
 INSERT INTO public.opportunities (id, title, coordinator_org_id)
 VALUES ('11111111-1111-1111-1111-111111111700', 'TEST-07 Opportunité', '11111111-1111-1111-1111-111111111101');
 
@@ -497,63 +508,130 @@ VALUES
      '11111111-1111-1111-1111-111111111102', '11111111-1111-1111-1111-111111111201',
      '11111111-1111-1111-1111-111111111103', ARRAY['request_issuance'], pg_temp.carbon_test_profile('superadmin'));
 
+-- RÉCONCILIATION EXÉCUTION RÉELLE (04/05 désormais appliquées) : quatre
+-- points, invisibles à pglast, découverts à la première exécution réelle de
+-- 07 (jamais exécutée avant ce passage, contrairement à 04/05 déjà validées
+-- en réel) :
+--   1. verification_sessions.status='completed' exige désormais
+--      reporting_period_start/end ET verifier_user_id (CHECK
+--      verification_sessions_completed_requires_period_and_verifier, 05) —
+--      absent des fixtures ci-dessous à l'origine (écrites avant 05).
+--   2. verifier_user_id doit référencer une identité ACCRÉDITÉE
+--      (accredited_verifiers, trigger BEFORE INSERT OR UPDATE ajouté par 05)
+--      — fixture d'accréditation ajoutée ci-dessous pour le profil `verifier`.
+--   3. verification_outcomes.verification_report_document_id est désormais
+--      NOT NULL et doit référencer une evidence_files existante
+--      (type='verification_report', file_hash renseigné, MÊME projet MRV que
+--      la session — trigger BEFORE INSERT carbon_guard_verification_outcome_insert(),
+--      05) — absent des fixtures ci-dessous à l'origine.
+--   4. DÉCOUVERTE LA PLUS PROFONDE : verification_sessions.project_id porte
+--      en réalité une FK RÉELLE vers public.projects (MRV), CONFIRMÉE par
+--      lecture directe de 20260710999100_reapply_mrv_and_aggregators.sql
+--      ligne 103 (`project_id UUID REFERENCES public.projects(id) ON DELETE
+--      CASCADE`) — jamais vers ccf_projects. Les fixtures S1-S6/S9/S10
+--      utilisaient pourtant directement l'id du projet CCF '...1701' comme
+--      project_id (hypothèse non tranchée avant 04/05, documentée comme
+--      telle en tête de fichier — « reste néanmoins une hypothèse tant que
+--      05 ne confirme pas... »). Avec la CHECK du point 1 satisfaite, cette
+--      hypothèse aurait ensuite échoué sur une violation de clé étrangère
+--      (masquée jusqu'ici par l'échec plus précoce du CHECK). Corrigé en
+--      créant un projet MRV DÉDIÉ ('...111904', ci-dessous), lié à
+--      '...1701' via un vrai ccf_mrv_project_links (migration 04,
+--      désormais disponible) — exerce enfin le chemin CCF↔MRV réellement
+--      prévu par carbon_is_source_organization_valid()/
+--      carbon_lock_and_validate_source_organization() (branche CCF résolue
+--      via link.ccf_project_id, branche MRV via link.mrv_project_id,
+--      organisation '...111108' dédiée et jamais utilisée comme source
+--      ailleurs dans ce fichier — aucune fuite possible vers les tests
+--      existants). S7 ('...111902', Source E) n'est PAS concernée : elle
+--      utilisait déjà un vrai id de projects (MRV), directement, sans lien —
+--      c'était le seul scénario correctement conçu dès l'origine.
+INSERT INTO public.organizations (id, name, status)
+VALUES ('11111111-1111-1111-1111-111111111108', 'TEST-07 MRV (contrepartie liée à ...1701)', 'active');
+
+INSERT INTO public.operational_units (id, organization_id, name)
+VALUES ('11111111-1111-1111-1111-111111111903', '11111111-1111-1111-1111-111111111108', 'TEST-07 Unité opérationnelle MRV liée');
+
+INSERT INTO public.projects (id, operational_unit_id, name)
+VALUES ('11111111-1111-1111-1111-111111111904', '11111111-1111-1111-1111-111111111903', 'TEST-07 Projet MRV lié à ...1701');
+
+-- Lien effectif CCF<->MRV (migration 04) — started_by/started_at forcés par
+-- le trigger BEFORE INSERT de 04, ended_at NULL (effectif).
+INSERT INTO public.ccf_mrv_project_links (ccf_project_id, mrv_project_id, started_by)
+VALUES ('11111111-1111-1111-1111-111111111701', '11111111-1111-1111-1111-111111111904', pg_temp.carbon_test_profile('superadmin'));
+
+-- Accréditation du profil `verifier` (registre accredited_verifiers,
+-- migration 05) — requise par le trigger BEFORE INSERT OR UPDATE sur
+-- verification_sessions dès qu'un verifier_user_id est renseigné.
+INSERT INTO public.accredited_verifiers (user_id, accredited_by)
+VALUES (pg_temp.carbon_test_profile('verifier'), pg_temp.carbon_test_profile('superadmin'));
+
+-- Preuves de vérification (evidence_files, migration 05) — une par projet
+-- MRV réellement utilisé ci-dessous, réutilisée par tous les outcomes de ce
+-- projet (aucune contrainte d'unicité sur verification_report_document_id).
+-- NB : la preuve du projet Source E ('...111902') ne peut être insérée ici
+-- (FK evidence_files_project_id_fkey) : ce projet MRV n'existe pas encore à
+-- ce stade du fichier — il est créé plus bas, juste avant la session S7
+-- (bloc « Source E / branche MRV »). Sa propre evidence_files
+-- ('...112302') est donc insérée juste après, au même endroit.
+INSERT INTO public.evidence_files (id, project_id, file_url, type, file_hash)
+VALUES ('11111111-1111-1111-1111-111111112301', '11111111-1111-1111-1111-111111111904', '/evidence/test-07-rapport-lie.pdf', 'verification_report', 'sha256:test-07-lie');
+
 -- Session + résultat de vérification (v1), eligible_tco2e = 100, session S1.
--- ⚠️ dépend du schéma réel de verification_sessions/verification_outcomes (migration 05).
 -- (correction 2, onzième revue statique) : périodes S1-S6 REDESSINÉES pour
 -- être STRICTEMENT NON CHEVAUCHANTES (fenêtres successives séparées d'au
 -- moins un jour), sur le même projet CCF '...1701' — anticipe la contrainte
 -- `EXCLUDE USING gist` prévue par la conception de la migration 05 sur les
 -- périodes des sessions 'completed'. Les dates elles-mêmes n'ont aucune
 -- importance pour les tests 07 ; seule l'absence de chevauchement compte.
--- Ordre chronologique arbitraire, non significatif. À adapter au DDL exact
--- de 05 une fois rédigée (type de colonne période, bornes inclusives/exclusives).
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111601', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 44, current_date - 38);
+-- Ordre chronologique arbitraire, non significatif.
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111601', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 44, current_date - 38, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111801', '11111111-1111-1111-1111-111111111601', 'active', 100, 100, 100,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- Session S2 indépendante, pour un contexte de capacité distinct.
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111602', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 52, current_date - 46);
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111602', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 52, current_date - 46, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111802', '11111111-1111-1111-1111-111111111602', 'active', 50, 50, 50,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- Session S3 dédiée au test direct de la contrainte différée de capacité
 -- (B19, correction 6, cinquième revue statique) — plafond volontairement
 -- petit et isolé des autres sessions pour un calcul sans ambiguïté.
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111603', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 60, current_date - 54);
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111603', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 60, current_date - 54, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111803', '11111111-1111-1111-1111-111111111603', 'active', 10, 10, 10,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- S4 : session/outcome dédiés aux 5 tests de complétude par état cible
 -- (correction 3, septième revue statique) — capacité large (100) et
 -- entièrement isolée des autres sessions pour ne jamais interférer avec
 -- leur comptabilité de capacité déjà établie dans les rounds précédents.
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111604', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 36, current_date - 30);
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111604', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 36, current_date - 30, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111804', '11111111-1111-1111-1111-111111111604', 'active', 100, 100, 100,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- Participation projet minimale. Schéma réel CONFIRMÉ (sixième revue
 -- statique, correction 2) : colonne `project_id`, PAS `ccf_project_id`
@@ -597,44 +675,56 @@ VALUES ('11111111-1111-1111-1111-111111111506', '11111111-1111-1111-1111-1111111
 
 -- S5/O5 (correction 3a, neuvième revue statique) : session/outcome dédiés,
 -- isolés, pour le test « aucun outcome actif pour la session ».
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111605', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 28, current_date - 22);
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111605', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 28, current_date - 22, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111805', '11111111-1111-1111-1111-111111111605', 'active', 20, 20, 20,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- S6/O6a(historique)+O6b(actif) (correction 3b, neuvième revue statique) :
 -- une session avec DEUX outcomes — O6a marqué superseded, O6b actif — pour
 -- le test « INSERT direct rattaché à un outcome non-actif de sa session,
 -- alors qu'un AUTRE outcome de cette même session est bien actif ».
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111606', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 20, current_date - 14);
+-- RÉCONCILIATION EXÉCUTION RÉELLE : migration 05 (carbon_guard_verification_
+-- outcome_insert()) interdit désormais tout INSERT direct avec
+-- status='superseded' — restructuré en INSERT (active) → UPDATE (superseded)
+-- → INSERT (active, supersedes_outcome_id) pour rester une fixture valide.
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111606', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 20, current_date - 14, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
-VALUES
-    ('11111111-1111-1111-1111-111111111806', '11111111-1111-1111-1111-111111111606', 'superseded', 20, 20, 20,
-     pg_temp.carbon_test_profile('verifier')),
-    ('11111111-1111-1111-1111-111111111816', '11111111-1111-1111-1111-111111111606', 'active', 20, 20, 20,
-     pg_temp.carbon_test_profile('verifier'));
+VALUES ('11111111-1111-1111-1111-111111111806', '11111111-1111-1111-1111-111111111606', 'active', 20, 20, 20,
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
+
+UPDATE public.verification_outcomes SET status = 'superseded' WHERE id = '11111111-1111-1111-1111-111111111806';
+
+INSERT INTO public.verification_outcomes (
+    id, verification_session_id, status, supersedes_outcome_id, calculated_reduction_tco2e, verified_reduction_tco2e,
+    eligible_tco2e, verification_report_document_id, verified_by, adjustment_reason
+)
+VALUES ('11111111-1111-1111-1111-111111111816', '11111111-1111-1111-1111-111111111606', 'active', '11111111-1111-1111-1111-111111111806', 20, 20, 20,
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'), 'Fixture de test : supersession délibérée pour exercer B34.');
 
 -- Source E / branche MRV (correction 3, dixième revue statique) — schéma
 -- réel CONFIRMÉ (20260710999100_reapply_mrv_and_aggregators.sql, cf.
 -- prévalidation section 0) : operational_units(id, organization_id NOT NULL,
 -- name NOT NULL), projects(id, operational_unit_id, name NOT NULL). Aucun
--- ccf_mrv_project_links n'est créé ici (table hypothétique, migration 04 non
--- rédigée) : verification_sessions.project_id référence donc DIRECTEMENT
--- l'id du projet MRV — le LEFT JOIN ccf_mrv_project_links de
+-- ccf_mrv_project_links n'est créé ici (migration 04, désormais disponible,
+-- mais délibérément non utilisée pour ce scénario) :
+-- verification_sessions.project_id référence donc DIRECTEMENT l'id du
+-- projet MRV — le LEFT JOIN ccf_mrv_project_links de
 -- carbon_is_source_organization_valid()/carbon_lock_and_validate_source_organization()
 -- ne trouve alors aucune ligne, et COALESCE(link.mrv_project_id, vs.project_id)
 -- retombe correctement sur vs.project_id lui-même (branche MRV directe,
--- sans lien CCF↔MRV explicite).
+-- sans lien CCF↔MRV explicite) — scénario distinct de S1-S6/S9/S10 qui,
+-- eux, exercent désormais la branche CCF↔MRV liée via '...111904'.
 INSERT INTO public.organizations (id, name, status)
 VALUES ('11111111-1111-1111-1111-111111111107', 'TEST-07 Source E (organisation MRV)', 'active');
 
@@ -644,46 +734,49 @@ VALUES ('11111111-1111-1111-1111-111111111901', '11111111-1111-1111-1111-1111111
 INSERT INTO public.projects (id, operational_unit_id, name)
 VALUES ('11111111-1111-1111-1111-111111111902', '11111111-1111-1111-1111-111111111901', 'TEST-07 Projet MRV');
 
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111607', '11111111-1111-1111-1111-111111111902', 'completed', current_date - 15, current_date);
+INSERT INTO public.evidence_files (id, project_id, file_url, type, file_hash)
+VALUES ('11111111-1111-1111-1111-111111112302', '11111111-1111-1111-1111-111111111902', '/evidence/test-07-rapport-source-e.pdf', 'verification_report', 'sha256:test-07-source-e');
+
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111607', '11111111-1111-1111-1111-111111111902', 'completed', current_date - 15, current_date, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111807', '11111111-1111-1111-1111-111111111607', 'active', 20, 20, 20,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112302', pg_temp.carbon_test_profile('verifier'));
 
 -- S9/O9 (correction 4, douzième revue statique) : session/outcome dédiés,
 -- isolés, cap large (100), pour l'émission multi-source M (B39 ci-dessous)
 -- — évite toute interférence de capacité avec les fixtures S1-S6/S4 déjà
 -- utilisées par d'autres tests. Période disjointe des autres sessions du
--- même projet '...701' (correction 2, onzième revue statique toujours
--- respectée).
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111608', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 12, current_date - 6);
+-- même projet MRV lié '...111904' (correction 2, onzième revue statique
+-- toujours respectée).
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111608', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 12, current_date - 6, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111808', '11111111-1111-1111-1111-111111111608', 'active', 100, 100, 100,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- S10/O10 (correction 1, treizième revue statique) : session/outcome
 -- dédiés, isolés, pour l'émission mono-source N (B40 ci-dessous) — M
 -- (ci-dessus) consomme déjà exactement 100/100 sur O9, aucune marge pour
 -- une émission supplémentaire sur cet outcome. Cap modeste (20), période
--- disjointe des autres sessions du même projet '...701'.
-INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end)
-VALUES ('11111111-1111-1111-1111-111111111609', '11111111-1111-1111-1111-111111111701', 'completed', current_date - 4, current_date);
+-- disjointe des autres sessions du même projet MRV lié '...111904'.
+INSERT INTO public.verification_sessions (id, project_id, status, reporting_period_start, reporting_period_end, verifier_user_id)
+VALUES ('11111111-1111-1111-1111-111111111609', '11111111-1111-1111-1111-111111111904', 'completed', current_date - 4, current_date, pg_temp.carbon_test_profile('verifier'));
 
 INSERT INTO public.verification_outcomes (
     id, verification_session_id, status, calculated_reduction_tco2e, verified_reduction_tco2e,
-    eligible_tco2e, verified_by
+    eligible_tco2e, verification_report_document_id, verified_by
 )
 VALUES ('11111111-1111-1111-1111-111111111809', '11111111-1111-1111-1111-111111111609', 'active', 20, 20, 20,
-        pg_temp.carbon_test_profile('verifier'));
+        '11111111-1111-1111-1111-111111112301', pg_temp.carbon_test_profile('verifier'));
 
 -- ────────────────────────────────────────────────────────────
 -- 3. TESTS COMPORTEMENTAUX
@@ -718,6 +811,24 @@ BEGIN
     PERFORM pg_temp.carbon_test_clear_actor();
 END $$;
 
+-- RÉCONCILIATION EXÉCUTION RÉELLE : décharge IMMÉDIATEMENT ici la contrainte
+-- différée trg_carbon_validate_issuance_capacity pour issuance_1/issuance_2,
+-- PENDANT que v1 est encore l'outcome actif de la session. En production,
+-- create_credit_issuance() s'exécute dans SA PROPRE transaction : la
+-- contrainte différée s'y valide (et se décharge, définitivement) à SON
+-- propre COMMIT — bien avant qu'une supersession future (dans une
+-- transaction ultérieure séparée) ne puisse jamais l'affecter. Ici,
+-- l'intégralité du script s'exécute dans UNE SEULE transaction
+-- (BEGIN...ROLLBACK) : sans ce contrôle explicite ICI, l'événement différé
+-- de CET INSERT resterait en file d'attente jusqu'au premier SET
+-- CONSTRAINTS ... IMMEDIATE rencontré plus loin dans le script (B33) —
+-- moment auquel v1 aurait déjà été superseded par B3, faisant échouer à tort
+-- le contrôle contre un état FUTUR, jamais contre l'état réel au moment de
+-- l'insertion. Artefact du harnais de test à transaction unique, PAS un bug
+-- de 07 (voir aussi la note symétrique après B4bis, pour v_id4/v2).
+SET CONSTRAINTS trg_carbon_validate_issuance_capacity IMMEDIATE;
+SET CONSTRAINTS trg_carbon_validate_issuance_capacity DEFERRED;
+
 -- B2 : dépassement direct de capacité (40+35 déjà émis ; 30 de plus dépasse 100).
 DO $$
 BEGIN
@@ -733,6 +844,39 @@ BEGIN
     PERFORM pg_temp.carbon_test_clear_actor();
 END $$;
 
+-- B9-setup (RELOCALISÉ ICI, réconciliation exécution réelle — voir aussi la
+-- note de B3 ci-dessous) : issuance_2 amenée à 'submitted' PENDANT que v1
+-- est encore l'outcome actif de la session. submit_credit_issuance() (07,
+-- check 4, natif — indépendant de toute restriction ajoutée par 05) exige
+-- que l'outcome référencé par l'émission soit encore actif au moment précis
+-- de la soumission. À sa position ORIGINALE (juste avant B9, c'est-à-dire
+-- après B3 et B6 qui supersèdent successivement v1→v2→v3), cette étape
+-- échouait systématiquement une fois B3 exécutée pour de vrai (v1 déjà
+-- superseded) — invisible tant que B3 elle-même échouait silencieusement
+-- (voir sa note). Les étapes ULTÉRIEURES du cycle de vie d'une émission
+-- (record_registry_issuance, record_externally_rejected,
+-- record_external_cancellation, void_credit_issuance) ne revalident PAS ce
+-- statut — confirmé par lecture des quatre fonctions correspondantes dans
+-- 07_carbon_issuances.sql : une fois 'submitted', une émission reste
+-- utilisable quelles que soient les supersessions ultérieures de l'outcome
+-- qu'elle référence à l'origine.
+DO $$
+DECLARE
+    v_id_sub UUID;
+BEGIN
+    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('admin_opa'));
+    v_id_sub := NULLIF(current_setting('carbon_test.issuance_2', true), '')::UUID;
+    BEGIN
+        PERFORM public.mark_credit_issuance_eligible(v_id_sub);
+        PERFORM public.submit_credit_issuance(v_id_sub, 'Registre de test');
+        PERFORM pg_temp.carbon_test_assert('B9-setup', 'issuance_2 amenée à submitted (avant supersession de v1)', true);
+    EXCEPTION WHEN OTHERS THEN
+        PERFORM pg_temp.carbon_test_assert('B9-setup', 'issuance_2 amenée à submitted (avant supersession de v1)', false, SQLERRM);
+    END;
+    PERFORM set_config('carbon_test.issuance_submitted', v_id_sub::text, false);
+    PERFORM pg_temp.carbon_test_clear_actor();
+END $$;
+
 -- B3 : supersession v1(100)→v2(90) avec 75 déjà consommés — nouvelle émission
 -- de 20 rejetée (75+20>90), de 15 réussit (75+15=90<=90).
 -- NOTE : ce test vérifie le CONTRAT entre 07 (carbon_capacity_consumed_for_session())
@@ -741,12 +885,19 @@ END $$;
 -- documenté en tête de 07_carbon_issuances.sql section 7. Un échec ici peut
 -- révéler soit un bug de 07, soit un écart de 05 par rapport à cette
 -- exigence documentée.
+-- RÉCONCILIATION EXÉCUTION RÉELLE : complete_verification_session() (05) est
+-- désormais réservée à is_assigned_verifier(p_verification_session_id) SEUL
+-- (« dérogation superadmin retirée, correctif vingtième revue statique » —
+-- voir son COMMENT ON FUNCTION) — le super-admin ne peut plus l'appeler,
+-- contrairement à l'hypothèse initiale de ce test (écrit avant que 05 ne
+-- soit rédigée). Acteur changé pour le vérificateur assigné à la session
+-- '...601' (pg_temp.carbon_test_profile('verifier'), voir fixture plus haut).
 DO $$
 BEGIN
-    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('superadmin'), true);
+    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('verifier'));
     BEGIN
         PERFORM public.complete_verification_session(
-            '11111111-1111-1111-1111-111111111601', 90, 90, NULL, 'Correction de test B3 (baisse à 90, > 75 déjà consommés)');
+            '11111111-1111-1111-1111-111111111601', 90, 90, '11111111-1111-1111-1111-111111112301', 'Correction de test B3 (baisse à 90, > 75 déjà consommés)');
         PERFORM pg_temp.carbon_test_assert('B3', 'supersession v1(100)->v2(90), 90>=75 déjà consommés : acceptée', true);
     EXCEPTION WHEN OTHERS THEN
         PERFORM pg_temp.carbon_test_assert('B3', 'supersession v1(100)->v2(90), 90>=75 déjà consommés : acceptée', false, SQLERRM);
@@ -797,25 +948,54 @@ BEGIN
     PERFORM pg_temp.carbon_test_clear_actor();
 END $$;
 
+-- v_id4 (issuance_4) amenée à 'submitted' ICI (RELOCALISÉ, réconciliation
+-- exécution réelle — même motif que le déplacement de B9-setup ci-dessus) :
+-- B6, juste après B5, supersède v2→v3, et submit_credit_issuance() exige que
+-- l'outcome référencé soit encore actif au moment de la soumission. B11
+-- (plus bas) ne fait plus que poursuivre le cycle de vie de cette émission
+-- (record_registry_issuance puis record_external_cancellation), qui ne
+-- revalident pas ce statut (voir note détaillée du bloc B9-setup relocalisé).
+DO $$
+DECLARE
+    v_id4 UUID;
+BEGIN
+    v_id4 := NULLIF(current_setting('carbon_test.issuance_4', true), '')::UUID;
+    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('admin_opa'));
+    PERFORM public.mark_credit_issuance_eligible(v_id4);
+    PERFORM public.submit_credit_issuance(v_id4, 'Registre de test');
+    PERFORM pg_temp.carbon_test_clear_actor();
+END $$;
+
+-- RÉCONCILIATION EXÉCUTION RÉELLE (symétrique à la note après B1) : décharge
+-- IMMÉDIATEMENT ici la contrainte différée trg_carbon_validate_issuance_capacity
+-- pour v_id4, PENDANT que v2 est encore l'outcome actif — B6, juste après
+-- B5, supersède v2→v3. Sans ce contrôle explicite ICI, l'événement différé
+-- de l'INSERT de v_id4 (dans B4bis) resterait en file d'attente jusqu'au
+-- premier SET CONSTRAINTS ... IMMEDIATE rencontré plus loin (B33), moment
+-- auquel v2 aurait déjà été superseded par B6 — échec à tort contre un état
+-- futur. Artefact du harnais de test à transaction unique, PAS un bug de 07.
+SET CONSTRAINTS trg_carbon_validate_issuance_capacity IMMEDIATE;
+SET CONSTRAINTS trg_carbon_validate_issuance_capacity DEFERRED;
+
 -- B5 : tentative de supersession vers un eligible_tco2e inférieur à la
 -- capacité déjà consommée (90 consommés) rejetée. Voir note B3.
 DO $$
 BEGIN
-    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('superadmin'), true);
+    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('verifier'));
     PERFORM pg_temp.carbon_test_assert_raises('B5', 'supersession vers eligible_tco2e(50) < consommé(90) rejetée',
         $sql$SELECT public.complete_verification_session(
-            '11111111-1111-1111-1111-111111111601', 50, 50, NULL, 'Test B5 : correction sous le déjà-consommé, doit échouer')$sql$,
-        'Supersession refusée');
+            '11111111-1111-1111-1111-111111111601', 50, 50, '11111111-1111-1111-1111-111111112301', 'Test B5 : correction sous le déjà-consommé, doit échouer')$sql$,
+        'la supersession échoue');
     PERFORM pg_temp.carbon_test_clear_actor();
 END $$;
 
 -- B6 : supersession vers exactement 90 (= consommé) réussit (limite). Voir note B3.
 DO $$
 BEGIN
-    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('superadmin'), true);
+    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('verifier'));
     BEGIN
         PERFORM public.complete_verification_session(
-            '11111111-1111-1111-1111-111111111601', 90, 90, NULL, 'Test B6 : correction à exactement 90, limite acceptée');
+            '11111111-1111-1111-1111-111111111601', 90, 90, '11111111-1111-1111-1111-111111112301', 'Test B6 : correction à exactement 90, limite acceptée');
         PERFORM pg_temp.carbon_test_assert('B6', 'supersession vers eligible_tco2e = consommé exactement (90) réussit', true);
     EXCEPTION WHEN OTHERS THEN
         PERFORM pg_temp.carbon_test_assert('B6', 'supersession vers eligible_tco2e = consommé exactement (90) réussit', false, SQLERRM);
@@ -852,23 +1032,9 @@ BEGIN
 END $$;
 
 -- B9 : submitted → voided impossible (décision 1, machine à états).
-DO $$
-DECLARE
-    v_id_sub UUID;
-BEGIN
-    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('admin_opa'));
-    v_id_sub := NULLIF(current_setting('carbon_test.issuance_2', true), '')::UUID;
-    BEGIN
-        PERFORM public.mark_credit_issuance_eligible(v_id_sub);
-        PERFORM public.submit_credit_issuance(v_id_sub, 'Registre de test');
-        PERFORM pg_temp.carbon_test_assert('B9-setup', 'issuance_2 amenée à submitted', true);
-    EXCEPTION WHEN OTHERS THEN
-        PERFORM pg_temp.carbon_test_assert('B9-setup', 'issuance_2 amenée à submitted', false, SQLERRM);
-    END;
-    PERFORM set_config('carbon_test.issuance_submitted', v_id_sub::text, false);
-    PERFORM pg_temp.carbon_test_clear_actor();
-END $$;
-
+-- issuance_2 a déjà été amenée à 'submitted' plus haut (bloc B9-setup,
+-- relocalisé avant B3 — voir sa note) ; 'carbon_test.issuance_submitted' est
+-- donc déjà positionné à ce stade.
 DO $$
 BEGIN
     PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('admin_opa'));
@@ -951,7 +1117,11 @@ BEGIN
     PERFORM pg_temp.carbon_test_clear_actor();
 END $$;
 
--- B11 : externally_cancelled NE libère PAS la capacité — via issuance_4 (v2, 15 tCO2e) amenée jusqu'à issued.
+-- B11 : externally_cancelled NE libère PAS la capacité — via issuance_4 (v2,
+-- 15 tCO2e) amenée jusqu'à issued. issuance_4 a déjà été amenée à
+-- 'submitted' plus haut (bloc relocalisé juste après B4bis — voir sa note) ;
+-- ce bloc ne fait plus que poursuivre le cycle de vie (registry_issuance
+-- puis external_cancellation).
 DO $$
 DECLARE
     v_id4 UUID;
@@ -959,11 +1129,6 @@ DECLARE
     v_consumed_after  NUMERIC;
 BEGIN
     v_id4 := NULLIF(current_setting('carbon_test.issuance_4', true), '')::UUID;
-
-    PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('admin_opa'));
-    PERFORM public.mark_credit_issuance_eligible(v_id4);
-    PERFORM public.submit_credit_issuance(v_id4, 'Registre de test');
-    PERFORM pg_temp.carbon_test_clear_actor();
 
     PERFORM pg_temp.carbon_test_set_actor(pg_temp.carbon_test_profile('superadmin'), true);
     PERFORM public.record_registry_issuance(v_id4, 'REG-TEST-004', '2026-01-15 10:00:00+00'::timestamptz);
