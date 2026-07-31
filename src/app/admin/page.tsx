@@ -185,6 +185,9 @@ const QUICK_LINKS = [
   { href: '/documents',      label: 'Documents',      icon: 'FolderOpenIcon',            desc: 'Documents et preuves' },
   { href: '/evenements',     label: 'Événements',     icon: 'BoltIcon',                  desc: 'Journal des événements métier' },
   { href: '/cockpit',        label: 'Cockpit',        icon: 'PresentationChartLineIcon', desc: 'Vue direction des projets' },
+  { href: '/admin-carbon-projects',      label: 'Projets Carbone MRV',   icon: 'FolderIcon',      desc: 'Gestion ISO 14064-2' },
+  { href: '/admin-verification-sessions', label: 'Sessions de vérification', icon: 'CheckBadgeIcon', desc: 'Vérifications tierces' },
+  { href: '/admin/carbon-inventory', label: 'Inventaire carbone', icon: 'ArchiveBoxIcon', desc: 'Résultats → émissions → lots commercialisables' },
 ];
 
 export default function AdminPage() {
