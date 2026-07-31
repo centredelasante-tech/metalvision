@@ -85,6 +85,17 @@ function getErrorMessage(err: unknown): string {
 
 function fmtDate(s: string | null | undefined): string {
   if (!s) return '—';
+  // reporting_period_start/end sont des colonnes `date` (sans heure). new
+  // Date('2026-01-01') les interprète comme minuit UTC ; toLocaleDateString
+  // reconvertit ensuite en heure LOCALE, ce qui décale d'un jour en arrière
+  // au Québec (UTC-4/-5) — même classe de bug que les champs datetime-local
+  // déjà corrigés. Pour une chaîne purement AAAA-MM-JJ, on construit la date
+  // directement en local, sans passage par UTC.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.exec(s);
+  if (dateOnly) {
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('fr-CA');
+  }
   return new Date(s).toLocaleDateString('fr-CA');
 }
 
