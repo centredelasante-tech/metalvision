@@ -1416,3 +1416,54 @@ La migration 09 et la Tranche 0 carbone sont techniquement closes. Sont validés
 Nouveau commit de clôture concurrence créé séparément. Le commit historique `6b3956d` n'est pas amendé. La migration `09_carbon_sales_financial_model.sql` n'est pas modifiée.
 
 ---
+
+## 21. Clôture fonctionnelle Lot 1 — Cockpit inventaire carbone (31 juillet 2026)
+
+**Contexte :** suite à la clôture technique de la Tranche 0 carbone (§18-§20), le travail est passé aux workflows produit/interface. Le Lot 1 (« plus petite tranche verticale ») couvre l'enchaînement `verification_outcomes → credit_issuances → credit_issuance_sources → credit_lots` côté opérateur, plus l'audit et la correction de `/admin-verification-sessions` côté MRV — préalable explicitement exigé avant tout test de bout en bout. Aucune migration existante n'a été modifiée pour ce lot ; toute la logique métier (transitions FSM, calculs, autorisations) reste portée par les RPC PostgreSQL des migrations 05/07/08 déjà closes.
+
+**1. Interfaces livrées**
+- `/admin/carbon-inventory` (nouvelle page) : cockpit opérateur — résultats de vérification admissibles, création/progression d'émission, enregistrement registre, création de lots, statuts de cycle de vie, annulation/rejet externes avec sélection de document de preuve.
+- `/admin-verification-sessions` (réécriture complète) : élimination des écritures directes bypassant les RPC de la migration 05 ; planification (`plan_verification_session`) avec assignation d'un vérificateur accrédité et période de rapport ; complétion (`complete_verification_session`) avec sélection de la preuve `evidence_files` et gestion explicite de la supersession.
+
+Quatre rondes de revue statique ont précédé le test réel (matrice d'actions FSM-exacte, gestion d'erreur SELECT explicite, filtrage adhésion/mandat exact, remplacement de la saisie manuelle de `document_id` par un sélecteur, correction de fuseau horaire sur les champs date/datetime-local dupliquée deux fois — `registry_issued_at` puis `reporting_period_start/end` affichés via `fmtDate()`).
+
+**2. Compte rendu du test de bout en bout (31 juillet 2026, production METALVISION, ref `dlbewgsoboaycbpypcus`)**
+Comptes/rôles utilisés :
+- `centredelasante@gmail.com` (superadmin plateforme) : création de session, planification, rôle opérateur carbone (ajouté comme membre `admin` de l'organisation opératrice MINOVIA — prérequis découvert en cours de test, `organization_members` était vide pour cette organisation).
+- `verifier@metaltrace.ca` (vérificateur accrédité, ajouté à `accredited_verifiers`) : complétion et supersession de la vérification, restreint par `auth.uid() = verifier_user_id` côté serveur.
+
+Prérequis de données absents de toute interface existante et créés directement en base pour permettre le test (aucun UI ne couvre encore ce domaine) : `accredited_verifiers`, `aggregators`, `aggregator_memberships`, `carbon_commercialization_mandates`, un `operational_units` rattaché au projet de test (voie MRV de `carbon_is_source_organization_valid()`), `organization_members` pour l'opérateur, une ligne `evidence_files` de type `verification_report`. Un profil `profiles` manquant pour `verifier@metaltrace.ca` a également été réparé (le trigger `on_auth_user_created_profile` avait été ajouté après la création de ce compte).
+
+Six scénarios validés en conditions réelles :
+1. **Cycle principal** — session de vérification planifiée → en cours → complétée (résultat actif, 90 tCO2e admissible) → émission créée → admissible → soumise au registre → émise (registre, 50 tCO2e) → lot créé (disponible, 50 tCO2e, reliquat 0).
+2. **Annulation externe avec cascade** — `record_external_cancellation` sur l'émission émise (registre) fait passer l'émission à `externally_cancelled` **et** voide automatiquement le lot associé (`voided`, cause `external_cancellation`) via le trigger de cascade, sans action manuelle sur le lot.
+3. **Annulation interne d'une émission admissible** — `void_credit_issuance` depuis le statut `internal`, motif conservé et affiché.
+4. **Rejet externe d'une émission soumise** — `record_externally_rejected` depuis `submitted`, bloqué correctement à ce stade (aucun lot, aucune émission registre).
+5. **Supersession contrôlée d'un résultat de vérification** — `complete_verification_session` réappelée sur une session déjà complétée : l'ancien résultat passe à `superseded`, le nouveau devient `active` et référence son prédécesseur via `supersedes_outcome_id`, motif d'ajustement obligatoire respecté.
+6. **Annulation directe d'un lot disponible** — `void_credit_lot` (cause `internal_correction`) : seul le lot passe à `voided`, l'émission parente reste `issued`, confirmant la distinction avec le scénario 2 (cascade externe, qui transitionne les deux).
+
+Un bug réel a été détecté et corrigé pendant le test (hors du périmètre des revues statiques précédentes) : embed PostgREST ambigu sur `accredited_verifiers.select('user_id, profiles(...)')` — deux FK vers `profiles` (`user_id` et `accredited_by`) empêchaient PostgREST de résoudre la relation implicite. Corrigé par un hint de contrainte explicite (`profiles!accredited_verifiers_user_id_fkey(...)`).
+
+**3. Identifiants des objets de test**
+Aucun nettoyage effectué — les IDs sont documentés ici pour suppression ultérieure si souhaité (l'organisation opératrice MINOVIA et son adhésion `organization_members` restent probablement nécessaires aux tests du Lot 2) :
+- Projet MRV : `projects.id = cae4ca66-af0f-4545-b7cf-2773357cb26a` (« Projet Test E2E »)
+- Session de vérification : `verification_sessions.id = e5d5f6e2-eee2-4540-865a-eae676b6b6c3`
+- Résultats de vérification : `3394d2f3-5961-4dc6-bfe8-ae90d7443b3a` (superseded, 90 tCO2e) → `56af5bdc-799a-4d10-8eb8-a91cc06563a0` (active, 85 tCO2e)
+- Émissions : `cdc1a6b5-821c-4d55-a9e0-c74dd9b12c42` (externally_cancelled, 50 tCO2e), `05c03b2b-49fe-4b98-83fb-2236bf784001` (voided, 10 tCO2e), `bdf539ea-a2f1-4367-b08c-8ca702c35923` (externally_rejected, 10 tCO2e), `13f2de13-588f-4bdd-a1f0-f1ddf70f33e6` (issued, 10 tCO2e)
+- Lots : `e0fdb575-0ea2-49dd-9f96-2404a642a8ab` (voided/external_cancellation), `4a63de04-c339-427a-a74e-62c9cdca92b2` (voided/internal_correction)
+- Regroupement/adhésion/mandat de test : `aggregators.id = 11111111-1111-1111-1111-111111111111`, `aggregator_memberships.id = 22222222-2222-2222-2222-222222222222` (Acier Laurentien Inc.)
+- `operational_units.id = 33333333-3333-3333-3333-333333333333` (rattaché au projet de test)
+- Document de preuve : `documents.id = 091e40d4-9b77-4d5d-abf9-4e8041f41c5f`
+
+**4. Migrations**
+**Aucune migration existante n'a été modifiée.** Toutes les transitions d'état, validations de capacité et calculs sont restés portés par les RPC des migrations 05/07/08, appelées telles quelles depuis le frontend.
+
+**5. Commits frontend**
+- `e6e8223` — Lot 1 : cockpit inventaire carbone + correctifs `/admin-verification-sessions`
+- `7077c5c` — Fix hint FK explicite `profiles!accredited_verifiers_user_id_fkey` (embed ambigu, détecté pendant le test)
+- `fc0ef12` — Fix décalage UTC/local d'un jour sur `fmtDate()` pour les champs date (période de rapport)
+
+**6. Conclusion**
+Le vertical slice du Lot 1 est validé en production sur les six parcours ci-dessus. Backend (migrations 05/07/08), interface sessions de vérification, interface inventaire carbone, RPC et garde-fous FSM, et parcours multi-rôles sont tous confirmés en conditions réelles. Aucun blocage fonctionnel restant. Prochaine tranche logique : Lot 2 — gouvernance des règles de distribution et des overrides (`/admin/carbon-sales`), avant le cockpit de ventes.
+
+---
