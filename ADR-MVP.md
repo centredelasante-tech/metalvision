@@ -1354,3 +1354,65 @@ total_assertions | total_reussies | total_echouees
 **État après GATE 3 : les migrations 01, 02, 03, 04, 05, 06, 06a, 07, 08 et 09 de la Tranche 0 carbone sont toutes appliquées en production et ont franchi leurs validations fonctionnelles documentées.** Pour 09, la validation transactionnelle GATE 3 est clôturée à 196/196 ; la validation de concurrence `STAGING_ONLY` reste distincte, non exécutée et hors du périmètre de cette validation production. La validation de concurrence `STAGING_ONLY` demeure la seule validation technique séparée encore ouverte avant clôture complète de la Tranche 0 carbone.
 
 ---
+
+## 19. Validation de concurrence STAGING — clone R4 contaminé après diagnostic dblink, décision de passer à un clone R5 vierge (27 juillet 2026)
+
+**Contexte :** après la clôture de GATE 3 (§18), la validation de concurrence réelle du harnais `09_test_carbon_sales_financial_model_concurrency_STAGING_ONLY.sql` a été poursuivie sur une série de clones Supabase jetables dédiés (R2, R3, R4 — R2 et R3 abandonnés/gelés comme artefacts forensiques antérieurs, jamais nettoyés ni réutilisés). Sur R4, les 66 migrations base + les 9 migrations carbone (01-09, y compris 07 et 09 via `psql --file` utilisateur, jamais via les outils MCP) ont été appliquées avec succès, `dblink` 1.2 activé, et 4 identités synthétiques `t09-a/b/c/d` créées en ordre chronologique strict — checkpoint final confirmé conforme avant tout GO sur le harnais.
+
+**Diagnostic d'authentification `dblink` (résumé) :** la première exécution réelle du harnais sur R4 a révélé que les 14 `dblink_connect()` du fichier original (connexion locale implicite, `dbname=current_database()` sans `host=`) échouaient systématiquement avec `password or GSSAPI delegated credentials required`. Diagnostic mené par une série de probes ciblés, sans fixture ni mutation métier :
+- **Probe A/B** (persistance de session, aucun secret) : `pg_backend_pid()` identique sur 3 instructions séparées, `set_config()`/`current_setting()` persistants — écarte l'hypothèse d'un pooling en mode transaction.
+- **Probe D** (`host=127.0.0.1` explicite) : échec identique — écarte l'hypothèse d'un socket local mal ciblé.
+- **Probe E** (`password_required=false`) : rejeté silencieusement — confirme que le rôle `postgres` de Supabase n'est pas un vrai superuser Postgres et ne peut pas invoquer cette échappatoire de `dblink_security_check()`.
+- **Probe F** (`dblink` ciblant le pooler externe Supavisor, `host=aws-0-ca-central-1.pooler.supabase.com port=5432 user=postgres.<ref> sslmode=require` — le même chemin que la session `psql` elle-même) : **succès complet**, authentification SCRAM réelle confirmée.
+
+**Correctif retenu (copie de travail v3, fichier original figé jamais modifié) :** les 14 `dblink_connect()` ciblent désormais le pooler externe (mécanisme validé par le Probe F), les identifiants sont injectés une seule fois en top-level via `\getenv`/`set_config()` (jamais à l'intérieur d'un bloc `DO $$...$$`, où l'interpolation psql ne s'applique pas — cause de l'abandon d'une première tentative de correctif, v1, jamais exécutée), et le retour de `set_config()` est explicitement transformé en booléen (`... IS NOT NULL AS dblink_password_loaded`) pour ne jamais faire apparaître le secret dans la sortie `psql` — correction apportée après qu'une fuite réelle du mot de passe R4 dans la sortie `psql`/le chat a effectivement eu lieu lors du diagnostic (mot de passe aussitôt tourné par l'utilisateur dans les Database Settings Supabase). Version finale : `09_test_carbon_sales_financial_model_concurrency_STAGING_ONLY_R4_dblinkauth_v3.sql`, MD5 `62fa5c29b36284c1e79681aaa855ed3a`, 2615 lignes, 177341 octets, 26/26 blocs `DO`, `v_expected=72`, `parse_sql` 81 instructions top-niveau valides (pglast, substitution psql simulée).
+
+**Échec de la première exécution réelle de la v3 sur R4 :** `ERROR: duplicate key value violates unique constraint "organizations_pkey"` — `DÉTAIL: Key (id)=(33333333-3333-3333-3333-c00000000001) already exists.` (ligne 331, premier `INSERT INTO organizations` des fixtures du harnais). **Diagnostic : ce n'est pas un défaut du harnais ni de la migration 09.** Les tentatives précédentes (v1 jamais exécutée ; v2 exécutée réellement mais interrompue par l'échec `dblink_connect` après avoir déjà committé ses fixtures initiales, le harnais étant explicitement non auto-nettoyant par conception) ont laissé R4 dans un état non vierge — les fixtures des tentatives antérieures sont restées committées, entrant en conflit avec les nouveaux `INSERT` de la v3. **La v3 ne constitue donc pas une exécution réelle des 72 assertions de concurrence** — l'échec se produit avant même d'atteindre le premier scénario testé.
+
+**Décision :** ne pas nettoyer R4 en place (un nettoyage manuel de fixtures métier + événements append-only + identités Auth ne pourrait pas démontrer une équivalence fiable à un clone neuf — contraire à l'objectif même du test de concurrence). R4 est gelé tel quel, non modifié davantage, comme artefact forensique de ce diagnostic — même discipline que R2/R3. La copie v3 du harnais (MD5 `62fa5c29b36284c1e79681aaa855ed3a`) est figée sans autre modification. Un nouveau clone **R5** (`METALVISION-STAGING-CONCURRENCY-09-R5`) est construit en rejouant strictement le même manifest déjà maîtrisé (01-22 APPLY / 23-45 SKIP / 46-47 APPLY / 48 SKIP / 49-66 APPLY, carbone 01-06/06a, 07, pré-08, 08, 09, `dblink` 1.2, 4 identités `t09-a/b/c/d`), avec un checkpoint court avant tout lancement (absence de fixtures du harnais, 4 profils synthétiques seulement, migrations conformes, `dblink` actif, MD5 v3 inchangé), et **sans aucun essai intermédiaire du harnais** — la première exécution du fichier sur R5 doit être directement la v3 finale, après un nouveau GO explicite.
+
+---
+
+## 20. Clôture technique — Migration 09 et validation de concurrence réelle (30 juillet 2026)
+
+**Contexte :** suite à §19 (clone R4 contaminé), la validation de concurrence réelle du harnais `09_test_carbon_sales_financial_model_concurrency_STAGING_ONLY_R4_dblinkauth_v3.sql` s'est poursuivie sur une série de clones jetables supplémentaires (R5 à R8), chacun ayant révélé puis fait corriger un défaut structurel du harnais lui-même (auto-interblocages locaux des scénarios L et M ; puis, sur R8, une fixture de preuve documentaire mal ciblée pour le scénario F et un second auto-interblocage sur le scénario N) — jamais un défaut de la logique de production des migrations 07, 08 ou 09. Chaque clone a été gelé après usage, jamais nettoyé ni réexécuté, conformément à la discipline déjà établie en §19. R9 est le neuvième et dernier de cette série, explicitement désigné comme la dernière reconstruction complète autorisée avant cette clôture.
+
+**1. Environnement de validation final**
+Projet staging jetable : `METALVISION-STAGING-CONCURRENCY-09-R9`
+Supabase project ref : `btnpimklwvrgtofognfu`
+Aucune donnée de production copiée. Aucune exécution du harnais sur production.
+
+**2. État des migrations**
+Manifest base (42 fichiers, 01-22 APPLY / 23-45 SKIP / 46-47 APPLY / 48 SKIP / 49-66 APPLY) et carbone 01-09 reconstruit conformément au parcours déjà validé sur les environnements précédents (R5 à R8). Migration 09 inchangée depuis son application production (§18) :
+`09_carbon_sales_financial_model.sql` — MD5 `c78dea31a7d1ac977ebf071aba9dab12`, 4224 lignes, 278430 octets.
+La validation de concurrence n'a nécessité aucune modification de la migration 09 ni des migrations 07/08 — seul le harnais de test lui-même (fichier `..._concurrency_STAGING_ONLY_R4_dblinkauth_v3.sql`) a été corrigé, au fil de R6 (scénario L), R7 (scénario M) et R8 (scénarios F et N).
+
+**3. Harnais final validé**
+Fichier : `09_test_carbon_sales_financial_model_concurrency_STAGING_ONLY_R4_dblinkauth_v3.sql`
+MD5 : `7f1f0e07f458eb6968f81f025989e114`
+Caractéristiques : 2909 lignes, 195738 octets, 34 blocs `DO` top-level, 89 statements top-level, `parse_plpgsql` 38/38, `v_expected=72`, 15 connexions `dblink`. Connexions `dblink` vers le pooler externe Supabase (Supavisor) en mode session, authentification SCRAM réelle, identifiants injectés au lancement via variables d'environnement, jamais stockés en clair dans le SQL ni affichés dans la sortie `psql`.
+
+**4. Résultat final R9**
+Exécution unique via `psql` en autocommit réel (aucun `BEGIN` externe ajouté, `ON_ERROR_STOP` actif) : **72/72 assertions, 0 échec, 0 doublon, code de sortie psql 0.** Toutes les sections B à N validées. Les scénarios L, M et N démontrent les comportements sous contention réelle au moyen de connexions PostgreSQL physiquement distinctes (locale + `dblink` vers le pooler externe). `M6bis` confirme explicitement que le blocage observé est un véritable conflit de verrou (message de verrouillage/timeout) et non un contournement d'autorisation préalable — la preuve que l'admin réel de l'opérateur candidat franchit bien l'autorisation avant de se heurter au verrou `platform_operators`.
+
+**5. Contrôle post-exécution**
+Sur R9 uniquement (requête read-only ciblée sur `pg_stat_activity`, filtrée sur toute trace `dblink`/`carbon_test09c`/`confirm_credit_sale`/état `idle in transaction`) : 0 connexion `dblink` résiduelle, 0 session `idle in transaction` liée au harnais, aucune autre base touchée, production jamais touchée. Les fixtures du harnais demeurent dans R9 par conception, jusqu'à la suppression de cet environnement jetable.
+
+**6. Conclusion de décision**
+La migration 09 et la Tranche 0 carbone sont techniquement closes. Sont validés par l'ensemble GATE 1/GATE 2/GATE 3 (§18, connexion unique) et R2-R9 (§19-§20, connexions multiples réelles) :
+- modèle financier des ventes ;
+- réservation et consommation concurrentes des lots ;
+- gouvernance des règles de distribution ;
+- gouvernance des overrides membres ;
+- confirmation concurrente des ventes ;
+- ajout concurrent des coûts ;
+- changement d'opérateur sous contention ;
+- verrouillage cohérent entre `join_aggregator()`, `confirm_credit_sale()` et `designate_platform_operator()` ;
+- absence de contournement des autorisations lors des conflits.
+
+**Aucun R10 n'est requis.** La prochaine phase n'est plus une phase de fondation SQL : le travail doit passer aux workflows produit, API et interfaces utilisateur.
+
+**7. Traçabilité**
+Nouveau commit de clôture concurrence créé séparément. Le commit historique `6b3956d` n'est pas amendé. La migration `09_carbon_sales_financial_model.sql` n'est pas modifiée.
+
+---
