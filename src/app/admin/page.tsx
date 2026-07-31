@@ -188,6 +188,7 @@ const QUICK_LINKS = [
   { href: '/admin-carbon-projects',      label: 'Projets Carbone MRV',   icon: 'FolderIcon',      desc: 'Gestion ISO 14064-2' },
   { href: '/admin-verification-sessions', label: 'Sessions de vérification', icon: 'CheckBadgeIcon', desc: 'Vérifications tierces' },
   { href: '/admin/carbon-inventory', label: 'Inventaire carbone', icon: 'ArchiveBoxIcon', desc: 'Résultats → émissions → lots commercialisables' },
+  { href: '/admin/regroupements/11111111-1111-1111-1111-111111111111/distribution', label: 'Gouvernance distribution (test)', icon: 'ScaleIcon', desc: 'Règles de distribution et overrides — Regroupement Test E2E' },
 ];
 
 export default function AdminPage() {
