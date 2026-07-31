@@ -220,7 +220,7 @@ function PlanModal({ session, onClose, onSaved }: { session: VerificationSession
       const supabase = createClient();
       const { data, error: err } = await supabase
         .from('accredited_verifiers')
-        .select('user_id, profiles(full_name, email)')
+        .select('user_id, profiles!accredited_verifiers_user_id_fkey(full_name, email)')
         .eq('active', true);
       if (err) { setVerifiersError(getErrorMessage(err)); setLoadingVerifiers(false); return; }
       const opts: AccreditedVerifierOption[] = (data ?? []).map((v: any) => ({
