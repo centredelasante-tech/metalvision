@@ -533,12 +533,17 @@ export default function VerifierMRVPage() {
   }, [currentUser, activeTab, fetchScanEvents]);
 
   // ── Start verification ──────────────────────────────────────────────────────
+  // Correctif migration 12 : l'UPDATE direct précédent ne levait aucune
+  // erreur mais n'avait aucun effet (aucune policy RLS UPDATE n'existe pour
+  // le vérificateur assigné — seul admin_manage_verification_sessions,
+  // scopé is_project_admin(), permet l'écriture). Passage par la RPC
+  // start_verification_session() qui effectue la même transition sous
+  // SECURITY DEFINER, avec revalidation d'accréditation et audit trail.
   const handleStart = async (sessionId: string) => {
     const supabase = createClient();
-    const { error } = await supabase
-      .from('verification_sessions')
-      .update({ status: 'in_progress' })
-      .eq('id', sessionId);
+    const { error } = await supabase.rpc('start_verification_session', {
+      p_verification_session_id: sessionId,
+    });
     if (error) {
       console.error('handleStart error:', error.message, error.code);
       alert('Erreur: ' + error.message);
