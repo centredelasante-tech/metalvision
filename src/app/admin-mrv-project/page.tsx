@@ -43,6 +43,20 @@ interface VerificationSession {
   created_at: string;
 }
 
+// Le statut "Vérifié" n'est PAS un champ que cet écran peut positionner
+// directement. Il est calculé en lecture seule à partir de
+// verification_outcomes (status = 'active'), produit exclusivement par la
+// RPC canonique complete_verification_session(). Voir correctif
+// gouvernance MRV — aucune écriture directe de projects.status='verified'
+// n'est permise depuis cette page.
+interface VerificationOutcome {
+  id: string;
+  verification_session_id: string;
+  status: string;
+  verified_reduction_tco2e: number | null;
+  verified_at: string | null;
+}
+
 function MRVProjectContent() {
   const searchParams = useSearchParams();
   const projectId = searchParams.get('id');
@@ -51,6 +65,7 @@ function MRVProjectContent() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
   const [sessions, setSessions] = useState<VerificationSession[]>([]);
+  const [activeOutcomes, setActiveOutcomes] = useState<VerificationOutcome[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'activities' | 'evidence' | 'verification'>('overview');
   const [exporting, setExporting] = useState(false);
@@ -68,9 +83,27 @@ function MRVProjectContent() {
     setProject(projRes.data ?? null);
     setLogs(logsRes.data ?? []);
     setEvidence(evRes.data ?? []);
-    setSessions(sessRes.data ?? []);
+    const sessionRows = sessRes.data ?? [];
+    setSessions(sessionRows);
+
+    // Statut "Vérifié" calculé en lecture seule depuis verification_outcomes
+    // (produit exclusivement par la RPC complete_verification_session()),
+    // jamais depuis une valeur écrite directement sur projects.status.
+    const sessionIds = sessionRows.map((s) => s.id);
+    if (sessionIds.length > 0) {
+      const outcomesRes = await supabase
+        .from('verification_outcomes')
+        .select('id, verification_session_id, status, verified_reduction_tco2e, verified_at')
+        .in('verification_session_id', sessionIds)
+        .eq('status', 'active');
+      setActiveOutcomes(outcomesRes.data ?? []);
+    } else {
+      setActiveOutcomes([]);
+    }
     setLoading(false);
   }, [projectId]);
+
+  const isVerified = activeOutcomes.length > 0;
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -96,8 +129,21 @@ function MRVProjectContent() {
     setExporting(false);
   };
 
+  // Correctif gouvernance MRV : cet écran ne peut plus positionner
+  // directement un projet au statut "verified". Seule la RPC canonique
+  // complete_verification_session() (via la finalisation d'une session de
+  // vérification) peut produire l'état "vérifié", exposé plus bas comme un
+  // badge en lecture seule dérivé de verification_outcomes. Toute tentative
+  // de contournement (valeur hors draft/active) est rejetée ici en défense
+  // en profondeur, même si l'UI ne l'expose plus.
+  const ALLOWED_DIRECT_STATUSES = ['draft', 'active'];
   const updateStatus = async (newStatus: string) => {
     if (!projectId) return;
+    if (!ALLOWED_DIRECT_STATUSES.includes(newStatus)) {
+      // eslint-disable-next-line no-console
+      console.error(`updateStatus: statut "${newStatus}" refusé — la finalisation de la vérification doit passer par les RPC canoniques (complete_verification_session).`);
+      return;
+    }
     const supabase = createClient();
     await supabase.from('projects').update({ status: newStatus }).eq('id', projectId);
     fetchData();
@@ -144,14 +190,22 @@ function MRVProjectContent() {
             {project.description && <p className="text-sm text-muted-foreground mt-1">{project.description}</p>}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {isVerified && (
+              <span
+                title="Calculé à partir d'un résultat de vérification actif (verification_outcomes) — non modifiable depuis cet écran"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-600 border text-blue-700 bg-blue-50 border-blue-200"
+              >
+                <Icon name="CheckBadgeIcon" size={14} />
+                Vérifié
+              </span>
+            )}
             <select
-              value={project.status}
+              value={ALLOWED_DIRECT_STATUSES.includes(project.status) ? project.status : 'draft'}
               onChange={e => updateStatus(e.target.value)}
               className="input text-sm py-2 pr-8"
             >
               <option value="draft">Brouillon</option>
               <option value="active">Actif</option>
-              <option value="verified">Vérifié</option>
             </select>
             <button
               onClick={handleExport}
