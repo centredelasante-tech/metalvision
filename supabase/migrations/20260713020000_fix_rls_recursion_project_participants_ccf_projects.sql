@@ -1,4 +1,31 @@
 -- =============================================================================
+-- ⚠️  BANDEAU — TIMESTAMP DE NOM DE FICHIER INEXACT — LIRE AVANT TOUTE ACTION
+-- =============================================================================
+-- Le nom de ce fichier commence par 20260713, mais il a été RÉELLEMENT écrit
+-- et committé le 2026-08-01 (commit 4f84023, 2026-08-01 18:26:30 -0400) — pas
+-- le 13 juillet. Conservé tel quel sur décision explicite (ne pas renommer,
+-- ne pas supprimer) — voir supabase/MIGRATIONS_TIMELINE.md pour la
+-- correspondance complète (fichier ↔ commit ↔ empreinte ↔ version distante).
+--
+-- PORTÉE : appliquée uniquement sur METALVISION-DEMO (msgesgemaasyzycielzf).
+-- Jamais appliquée en production.
+--
+-- STATUT : SUPERSEDÉE. Son effet a été entièrement défait sur METALVISION-DEMO
+-- le 2026-08-01 par la migration de réconciliation
+-- 20260801010000_reconcile_project_participants_ccf_projects_with_production.sql
+-- (les fonctions/policies qu'elle introduit ont été supprimées et remplacées
+-- par la forme réellement observée en production). L'état actif de DEMO ne
+-- correspond donc plus au contenu de ce fichier — il correspond à celui de
+-- 20260801010000.
+--
+-- HISTORIQUE DISTANT : cette migration est enregistrée dans l'historique
+-- Supabase de METALVISION-DEMO sous le nom "fix_rls_recursion_project_
+-- participants_ccf_projects" et la version "20260801222141" — ni ce nom ni
+-- cette version ne reprennent le timestamp du présent nom de fichier
+-- (comportement de l'outil d'application, pas une erreur de ce fichier).
+-- =============================================================================
+
+-- =============================================================================
 -- Migration: Fix RLS infinite recursion between project_participants and
 --            ccf_projects
 -- Timestamp: 20260713020000
