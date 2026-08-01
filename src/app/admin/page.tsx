@@ -189,6 +189,7 @@ const QUICK_LINKS = [
   { href: '/admin-verification-sessions', label: 'Sessions de vérification', icon: 'CheckBadgeIcon', desc: 'Vérifications tierces' },
   { href: '/admin/carbon-inventory', label: 'Inventaire carbone', icon: 'ArchiveBoxIcon', desc: 'Résultats → émissions → lots commercialisables' },
   { href: '/admin/regroupements/11111111-1111-1111-1111-111111111111/distribution', label: 'Gouvernance distribution (test)', icon: 'ScaleIcon', desc: 'Règles de distribution et overrides — Regroupement Test E2E' },
+  { href: '/admin/carbon-sales', label: 'Cockpit de ventes', icon: 'BanknotesIcon', desc: 'Ventes de crédits carbone — coûts, confirmation, répartition, règlement' },
 ];
 
 export default function AdminPage() {
