@@ -1467,3 +1467,49 @@ Aucun nettoyage effectué — les IDs sont documentés ici pour suppression ult�
 Le vertical slice du Lot 1 est validé en production sur les six parcours ci-dessus. Backend (migrations 05/07/08), interface sessions de vérification, interface inventaire carbone, RPC et garde-fous FSM, et parcours multi-rôles sont tous confirmés en conditions réelles. Aucun blocage fonctionnel restant. Prochaine tranche logique : Lot 2 — gouvernance des règles de distribution et des overrides (`/admin/carbon-sales`), avant le cockpit de ventes.
 
 ---
+
+## 22. Clôture fonctionnelle Lot 2 — Gouvernance distribution et overrides (31 juillet 2026)
+
+**Contexte :** suite à la clôture du Lot 1 (§21), le Lot 2 couvre les deux workflows de gouvernance économique de migration 09 restés jusqu'ici non exposés en interface : `distribution_rules`/`distribution_rule_proposals` (double approbation) et `member_distribution_overrides`/`member_distribution_override_proposals` (triple approbation, trois types de proposition `create`/`replace`/`revoke`). Décision explicite de l'utilisateur en amont de la construction : route `/admin/regroupements/[aggregatorId]/distribution` (plutôt qu'un onglet du futur cockpit de ventes), et désignation préalable d'un vrai `primary_admin` de test avant tout code, la présence de cette identité conditionnant directement la visibilité des actions testables.
+
+**1. Interface livrée**
+- `/admin/regroupements/[aggregatorId]/distribution` (nouvelle page) : section « Règle de distribution » (règle active, proposition en attente avec statut des deux approbations, actions Approuver/Rejeter/Retirer selon rôle réel, historique) et section « Overrides membres » (par adhésion : overrides actifs, proposition en attente avec statut des trois approbations, mêmes actions, historique). Détection de rôle côté client à des fins d'affichage uniquement (`aggregator_admins`, `organization_members`, `app_metadata.role`) — le serveur RPC revalide systématiquement, aucune autorisation métier n'est dupliquée côté React.
+- Lien ajouté au hub `/admin`, pointant directement sur le regroupement de test (pas de sélecteur global d'agrégateur, conformément à la décision utilisateur).
+
+**2. Bug RLS réel trouvé et corrigé pendant le test**
+La table `organizations` n'avait que deux policies SELECT (`organizations_project_participant_select`, issue du domaine CCF, et `organizations_superadmin_all`) — aucune ne couvrait le cas « je suis admin d'un regroupement carbone / operator_admin et je dois lire le nom des organisations membres de mon regroupement ». RLS filtrait silencieusement (aucune erreur PostgREST), le nom retombait sur l'UUID brut côté frontend. Corrigé par une migration additive dédiée, sans toucher aux deux policies existantes :
+`supabase/carbon_migrations_proposed/10_carbon_organizations_governance_visibility.sql` — nouvelle policy `organizations_aggregator_governance_select`, portée à `is_aggregator_admin(am.aggregator_id) OR is_platform_operator_admin(operateur actif)` via jointure `aggregator_memberships`, sans filtre `ended_at` (cohérent avec `aggregator_memberships_admin_select` de la migration 02). Appliquée directement en production après confirmation explicite de l'utilisateur.
+
+**3. Compte rendu du test de bout en bout (31 juillet 2026, production METALVISION, ref `dlbewgsoboaycbpypcus`)**
+Comptes/rôles utilisés :
+- `jean@hotmail.com` — `primary_admin` de « Regroupement Test E2E » (`aggregator_admins.id = d35a3324-b1bd-48a9-8dbc-d1cec7517d4f`, désigné par le superadmin le 31 juillet 2026, rôle de test **temporaire**). Mot de passe réinitialisé pour les besoins du test (compte existant depuis le 21 juillet 2026, jamais utilisé) ; non consigné ici.
+- `claudefairplay@hotmail.com` — promu `org_role='admin'` d'Acier Laurentien Inc. (`organization_members.id = 9461a20e-fc9c-4721-ba2a-b8f7b6b38fca`, précédemment `membre`) pour couvrir le rôle `organization_admin` des overrides.
+- `centredelasante@gmail.com` — superadmin plateforme, déjà admin actif de l'organisation opératrice METALTRACE (`organization_members.id = 2d98c7bd-112e-49d7-b3e0-1efc999c9e4d`) : couvre à la fois `operator_admin` et la dérogation superadmin.
+
+Six scénarios validés en conditions réelles, chacun revérifié par requête SQL directe après action UI (jamais la capture d'écran seule) :
+1. **Règle de distribution — proposition et double approbation** — `propose_distribution_rule` (frais 10 %, réserve 5 %, pondération 1) → `distribution_rule_proposals.id = 69860101-...` (`pending`, deux approbations `null`) → approbation regroupement (jean) → toujours `pending` → approbation opérateur (centredelasante) → `activated`, `distribution_rules.id = deae125d-...` créée avec `effective_from` généré serveur à l'instant exact de la 2ᵉ approbation, lien bidirectionnel `activated_distribution_rule_id` ↔ `proposal_id` confirmé.
+2. **Override membre — création (triple approbation)** — `propose_member_distribution_override('create', ...)` (fee_pct 8 %) → `member_distribution_override_proposals.id = d892452b-...` → approbations org. membre (claudefairplay) + opérateur (centredelasante) + regroupement (jean, dernière) → `activated`, `member_distribution_overrides.id = 1b47696d-...` créé ; `created_by` de l'override = `proposed_by` de la proposition (provenance conforme au point 2 de la huitième revue statique de migration 09, §17 9bis).
+3. **Rejet d'une proposition de règle** — nouvelle proposition (12 %/6 %/1) rejetée par l'opérateur (centredelasante) **avant toute approbation**, motif obligatoire fourni (« Test de rejet E2E ») → `distribution_rule_proposals.id = 8237eb9f-...`, `status='rejected'`, `rejected_by`/`rejected_at`/`reject_reason` renseignés, `activated_distribution_rule_id` reste `null`, règle active inchangée.
+4. **Retrait par l'auteur** — nouvelle proposition (6 %/9 %/1) retirée immédiatement par son auteur (jean) → `distribution_rule_proposals.id = 04171e27-...`, `status='withdrawn'`, aucune approbation, aucun rejet, aucune activation.
+5. **Override membre — remplacement** — `propose_member_distribution_override('replace', target_override_id=1b47696d-..., fee_pct=6%, ...)` → `member_distribution_override_proposals.id = 55657262-...` → triple approbation → `activated`. Vérification de l'alignement `tstzrange` exact conçu en migration 09 : `1b47696d-...revoked_at` = `f8e1b1c6-...created_at` = `2026-08-01 00:11:02.491002+00` **au microseconde près**, aucun chevauchement ni trou de couverture.
+6. **Override membre — révocation pure** — `propose_member_distribution_override('revoke', target_override_id=f8e1b1c6-..., revoke_reason=...)` → `member_distribution_override_proposals.id = 1bec6e02-...` → triple approbation → `activated`, `activated_override_id` pointe vers l'override ciblé lui-même (aucune nouvelle ligne, cohérent avec un `revoke` pur) ; `f8e1b1c6-...` porte désormais `revoked_at`/`revoked_by`/`revocation_proposal_id` renseignés. Plus aucun override actif pour Acier Laurentien Inc. à l'issue du test.
+
+**4. Identifiants des objets de test**
+Aucun nettoyage effectué (les comptes/adhésions restent probablement nécessaires au Lot 3) :
+- Désignation primary_admin : `aggregator_admins.id = d35a3324-b1bd-48a9-8dbc-d1cec7517d4f`
+- Promotion organization_admin : `organization_members.id = 9461a20e-fc9c-4721-ba2a-b8f7b6b38fca`
+- Propositions de règle : `69860101-7bf8-4226-8d63-64653fd9b4cb` (activated), `8237eb9f-f836-4db0-8b3f-7ef9129684a8` (rejected), `04171e27-1dc6-4fe0-b378-6c9ec80fba94` (withdrawn)
+- Règle active : `distribution_rules.id = deae125d-d241-439b-9b88-d368f97604f7` (10 %/5 %/1)
+- Propositions d'override : `d892452b-ebd9-45e3-9519-d883bb035bac` (create, activated), `55657262-57e0-4407-8a9c-f22baca51d54` (replace, activated), `1bec6e02-b3a8-40c2-8c0d-f14c52024ed0` (revoke, activated)
+- Overrides : `1b47696d-6c25-476a-816a-b161098d75a9` (créé puis révoqué via replace), `f8e1b1c6-7683-4b12-ab68-cd030eeee50b` (créé via replace, révoqué via revoke)
+
+**5. Migrations**
+**Aucune migration existante (01-09) n'a été modifiée.** Une seule migration additive a été rédigée et appliquée : `10_carbon_organizations_governance_visibility.sql` (nouvelle policy RLS SELECT sur `organizations`, cf. point 2). Toutes les transitions d'état, calculs et autorisations métier restent portés par les RPC de la migration 09, appelées telles quelles depuis le frontend.
+
+**6. Commit frontend**
+- `b6d7b36` — Lot 2 : gouvernance distribution_rules + member_distribution_overrides (page + lien hub `/admin`)
+
+**7. Conclusion**
+Le vertical slice du Lot 2 est validé en production sur les six scénarios ci-dessus, couvrant l'intégralité de la matrice d'actions des deux workflows de migration 09 (double et triple approbation, rejet, retrait, et les trois types de proposition d'override). Un bug RLS réel (visibilité `organizations`) a été détecté et corrigé pendant le test, hors du périmètre des revues statiques de migration 09 — confirmant à nouveau la valeur du test de bout en bout en conditions réelles. Aucun blocage fonctionnel restant. Prochaine tranche logique : Lot 3 — cockpit de ventes (`/admin/carbon-sales`), qui pourra afficher la gouvernance applicable à une vente sans jamais devenir le lieu d'administration de cette gouvernance.
+
+---
