@@ -9,19 +9,25 @@ interface MobileBottomNavProps {
   userRole: 'client' | 'admin' | 'verifier';
 }
 
+// Voir src/components/Sidebar.tsx pour le contexte complet du marqueur
+// legacyLogisticsUI et du feature flag DEMO-only
+// NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV (aucune suppression de page,
+// route API ou composant — uniquement le lien de navigation).
+const HIDE_LEGACY_LOGISTICS_NAV = process.env.NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV === 'true';
+
 const clientItems = [
   { label: 'Accueil', href: '/', icon: 'HomeIcon' },
-  { label: 'Scanner', href: '/qr-code-scanner', icon: 'QrCodeIcon' },
-  { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon' },
-  { label: 'Transport', href: '/transport-tracking', icon: 'TruckIcon' },
+  { label: 'Scanner', href: '/qr-code-scanner', icon: 'QrCodeIcon', legacyLogisticsUI: true },
+  { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon', legacyLogisticsUI: true },
+  { label: 'Transport', href: '/transport-tracking', icon: 'TruckIcon', legacyLogisticsUI: true },
   { label: 'Carbone', href: '/carbon-impact', icon: 'CloudIcon' },
 ];
 
 const adminItems = [
-  { label: 'Dashboard', href: '/admin-dashboard', icon: 'ChartBarIcon' },
-  { label: 'Lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon' },
-  { label: 'Scanner', href: '/qr-code-scanner', icon: 'QrCodeIcon' },
-  { label: 'Transport', href: '/admin-transport', icon: 'TruckIcon' },
+  { label: 'Dashboard', href: '/admin-dashboard', icon: 'ChartBarIcon', legacyLogisticsUI: true },
+  { label: 'Lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', legacyLogisticsUI: true },
+  { label: 'Scanner', href: '/qr-code-scanner', icon: 'QrCodeIcon', legacyLogisticsUI: true },
+  { label: 'Transport', href: '/admin-transport', icon: 'TruckIcon', legacyLogisticsUI: true },
   { label: 'Carbone', href: '/admin-carbon-projects', icon: 'FolderIcon' },
 ];
 
@@ -33,10 +39,13 @@ export default function MobileBottomNav({ activeRoute, userRole }: MobileBottomN
   const pathname = usePathname();
   const currentPath = pathname || activeRoute;
 
-  const items =
+  const rawItems =
     userRole === 'admin' ? adminItems :
     userRole === 'verifier' ? verifierItems :
     clientItems;
+  const items = HIDE_LEGACY_LOGISTICS_NAV
+    ? rawItems.filter((item) => !('legacyLogisticsUI' in item && item.legacyLogisticsUI))
+    : rawItems;
 
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border safe-area-bottom">

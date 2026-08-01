@@ -11,14 +11,30 @@ interface NavItem {
   icon: string;
   badgeKey?: 'lots' | 'factures';
   group?: string;
+  // Interface de la chaîne logistique physique (collecte, conteneurs, QR,
+  // transport routier/ferroviaire) — fonction stratégique CONSERVÉE côté
+  // backend/API (voir Audit-Frontend-Legacy-Rocket.md, Volet C), mais
+  // l'interface actuelle est classée « À REFONDRE — HORS PARCOURS
+  // CANONIQUE ACTUEL ». Ce marqueur permet de la masquer dans la
+  // navigation de METALVISION-DEMO uniquement, via
+  // NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV, sans toucher aux pages,
+  // routes API ou composants eux-mêmes (aucune suppression).
+  legacyLogisticsUI?: boolean;
 }
+
+// Feature flag DEMO-only : ne masque QUE l'entrée de navigation, jamais la
+// route/l'API/le composant sous-jacent. Défaut = false (comportement
+// production inchangé) ; à activer uniquement sur le déploiement
+// demo.metaltrace.ca via une variable d'environnement Vercel dédiée à cet
+// environnement (jamais sur le déploiement production).
+const HIDE_LEGACY_LOGISTICS_NAV = process.env.NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV === 'true';
 
 const clientNav: NavItem[] = [
   { label: 'Tableau de bord', href: '/', icon: 'HomeIcon', group: 'principal' },
-  { label: 'Scanner QR', href: '/qr-code-scanner', icon: 'QrCodeIcon', group: 'principal' },
-  { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon', group: 'principal' },
-  { label: 'Mes conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'principal' },
-  { label: 'Suivi transport', href: '/transport-tracking', icon: 'TruckIcon', group: 'transport' },
+  { label: 'Scanner QR', href: '/qr-code-scanner', icon: 'QrCodeIcon', group: 'principal', legacyLogisticsUI: true },
+  { label: 'Nouveau lot', href: '/new-lot', icon: 'PlusCircleIcon', group: 'principal', legacyLogisticsUI: true },
+  { label: 'Mes conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'principal', legacyLogisticsUI: true },
+  { label: 'Suivi transport', href: '/transport-tracking', icon: 'TruckIcon', group: 'transport', legacyLogisticsUI: true },
   { label: 'Impact Carbone', href: '/carbon-impact', icon: 'CloudIcon', group: 'carbone' },
   { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
@@ -30,12 +46,12 @@ const clientNav: NavItem[] = [
 ];
 
 const adminNav: NavItem[] = [
-  { label: 'Tableau de bord', href: '/admin-dashboard', icon: 'ChartBarIcon', group: 'principal' },
-  { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badgeKey: 'lots', group: 'opérations' },
-  { label: 'Conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'opérations' },
+  { label: 'Tableau de bord', href: '/admin-dashboard', icon: 'ChartBarIcon', group: 'principal', legacyLogisticsUI: true },
+  { label: 'Gestion des lots', href: '/lot-management', icon: 'ClipboardDocumentListIcon', badgeKey: 'lots', group: 'opérations', legacyLogisticsUI: true },
+  { label: 'Conteneurs', href: '/lot-management', icon: 'ArchiveBoxIcon', group: 'opérations', legacyLogisticsUI: true },
   { label: 'Clients', href: '/', icon: 'BuildingOfficeIcon', group: 'opérations' },
   { label: 'Organisations', href: '/organizations', icon: 'BuildingOffice2Icon', group: 'opérations' },
-  { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations' },
+  { label: 'Transports', href: '/admin-transport', icon: 'TruckIcon', group: 'opérations', legacyLogisticsUI: true },
   { label: 'Capacités', href: '/capacites', icon: 'CubeIcon', group: 'réseau' },
   { label: 'Opportunités', href: '/opportunities', icon: 'LightBulbIcon', group: 'réseau' },
   { label: 'Mandats', href: '/mandats', icon: 'DocumentCheckIcon', group: 'réseau' },
@@ -71,7 +87,10 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   const [memberRole, setMemberRole] = useState<string | null>(null);
   const [submittedLotsCount, setSubmittedLotsCount] = useState<number>(0);
 
-  const navItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
+  const rawNavItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
+  const navItems = HIDE_LEGACY_LOGISTICS_NAV
+    ? rawNavItems.filter((n) => !n.legacyLogisticsUI)
+    : rawNavItems;
   const groups = Array.from(new Set(navItems.map((n) => n.group)));
 
   useEffect(() => {
