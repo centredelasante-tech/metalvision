@@ -84,30 +84,102 @@ interface SubmitReportModalProps {
   onSaved: () => void;
 }
 
+// Calcule le hash SHA-256 (hex) d'un fichier côté client, via l'API Web
+// Crypto native (SubtleCrypto) — aucune dépendance externe, disponible dans
+// tout navigateur moderne servi en HTTPS.
+async function sha256Hex(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// Correctif migration 12/13 : l'ancien flux faisait un UPDATE direct
+// (status:'completed', comments, report_url) sur verification_sessions —
+// bloqué par la même absence de policy RLS que le bouton « Démarrer », et de
+// toute façon rejeté par le trigger structurel qui interdit 'completed' sans
+// verification_outcome existant. Plus profondément, la vraie RPC
+// complete_verification_session() exige verified_reduction_tco2e,
+// eligible_tco2e et un verification_report_document_id référençant une
+// preuve (evidence_files, type=verification_report, file_hash renseigné) —
+// aucun chemin de l'application ne produisait jamais une telle preuve.
+// Ce formulaire fait maintenant les 3 étapes réelles : upload dans le
+// bucket Storage dédié 'verification-evidence' → hash SHA-256 client →
+// record_verification_report_evidence() (RPC, insère la ligne evidence_files
+// pour le compte du vérificateur assigné) → complete_verification_session().
 function SubmitReportModal({ session, onClose, onSaved }: SubmitReportModalProps) {
-  const [comments, setComments] = useState('');
-  const [reportUrl, setReportUrl] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [verifiedTco2e, setVerifiedTco2e] = useState('');
+  const [eligibleTco2e, setEligibleTco2e] = useState('');
+  const [adjustmentReason, setAdjustmentReason] = useState('');
   const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState('');
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!comments.trim()) { setError('Les commentaires sont obligatoires.'); return; }
-    setSaving(true);
     setError('');
+
+    if (!file) { setError('Le document de preuve (rapport de vérification) est obligatoire.'); return; }
+    const verified = Number(verifiedTco2e);
+    const eligible = Number(eligibleTco2e);
+    if (verifiedTco2e.trim() === '' || Number.isNaN(verified) || verified < 0) {
+      setError('La réduction vérifiée (tCO2e) doit être un nombre positif ou nul.');
+      return;
+    }
+    if (eligibleTco2e.trim() === '' || Number.isNaN(eligible) || eligible < 0) {
+      setError('La quantité éligible (tCO2e) doit être un nombre positif ou nul.');
+      return;
+    }
+    if (eligible > verified) {
+      setError('La quantité éligible ne peut pas dépasser la réduction vérifiée.');
+      return;
+    }
+
+    setSaving(true);
     const supabase = createClient();
-    const { error: err } = await supabase
-      .from('verification_sessions')
-      .update({
-        status: 'completed',
-        comments: comments.trim(),
-        report_url: reportUrl.trim() || null,
-      })
-      .eq('id', session.id);
-    setSaving(false);
-    if (err) { setError(err.message); return; }
-    onSaved();
-    onClose();
+
+    try {
+      setStep('Calcul de l\'empreinte du document…');
+      const fileHash = await sha256Hex(file);
+
+      setStep('Téléversement de la preuve…');
+      const storagePath = `${session.id}/${Date.now()}_${file.name}`;
+      const { error: uploadErr } = await supabase.storage
+        .from('verification-evidence')
+        .upload(storagePath, file);
+      if (uploadErr) throw new Error(`Téléversement échoué : ${uploadErr.message}`);
+
+      setStep('Enregistrement de la preuve…');
+      const { data: evidenceId, error: evidenceErr } = await supabase.rpc(
+        'record_verification_report_evidence',
+        {
+          p_verification_session_id: session.id,
+          p_file_url: storagePath,
+          p_file_hash: fileHash,
+        }
+      );
+      if (evidenceErr) throw new Error(evidenceErr.message);
+
+      setStep('Enregistrement du résultat de vérification…');
+      const { error: completeErr } = await supabase.rpc('complete_verification_session', {
+        p_verification_session_id: session.id,
+        p_verified_reduction_tco2e: verified,
+        p_eligible_tco2e: eligible,
+        p_verification_report_document_id: evidenceId,
+        p_adjustment_reason: adjustmentReason.trim() || null,
+      });
+      if (completeErr) throw new Error(completeErr.message);
+
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+      setStep('');
+    }
   };
 
   return (
@@ -122,26 +194,54 @@ function SubmitReportModal({ session, onClose, onSaved }: SubmitReportModalProps
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-600 text-foreground mb-1">
-              Commentaires de vérification <span className="text-red-500">*</span>
+              Document de preuve (rapport de vérification) <span className="text-red-500">*</span>
             </label>
-            <textarea
-              className="input w-full min-h-[100px] resize-y"
-              placeholder="Observations, conclusions, recommandations…"
-              value={comments}
-              onChange={e => setComments(e.target.value)}
+            <input
+              type="file"
+              className="input w-full"
+              onChange={e => setFile(e.target.files?.[0] ?? null)}
               required
             />
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-600 text-foreground mb-1">
+                Réduction vérifiée (tCO2e) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0"
+                className="input w-full"
+                value={verifiedTco2e}
+                onChange={e => setVerifiedTco2e(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-600 text-foreground mb-1">
+                Quantité éligible (tCO2e) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0"
+                className="input w-full"
+                value={eligibleTco2e}
+                onChange={e => setEligibleTco2e(e.target.value)}
+                required
+              />
+            </div>
+          </div>
           <div>
             <label className="block text-sm font-600 text-foreground mb-1">
-              Lien vers le rapport final <span className="text-muted-foreground text-xs">(optionnel)</span>
+              Motif d'ajustement <span className="text-muted-foreground text-xs">(obligatoire si écart &gt; 1 % avec l'activité calculée, ou en cas de correction d'un résultat déjà actif)</span>
             </label>
-            <input
-              type="url"
-              className="input w-full"
-              placeholder="https://…"
-              value={reportUrl}
-              onChange={e => setReportUrl(e.target.value)}
+            <textarea
+              className="input w-full min-h-[80px] resize-y"
+              placeholder="Justification de l'écart ou de la correction…"
+              value={adjustmentReason}
+              onChange={e => setAdjustmentReason(e.target.value)}
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -154,7 +254,7 @@ function SubmitReportModal({ session, onClose, onSaved }: SubmitReportModalProps
               disabled={saving}
               className="btn-primary px-4 py-2 rounded-lg text-sm font-600 disabled:opacity-50"
             >
-              {saving ? 'Envoi…' : 'Soumettre'}
+              {saving ? (step || 'Envoi…') : 'Soumettre'}
             </button>
           </div>
         </form>
