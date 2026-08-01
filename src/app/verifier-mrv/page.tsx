@@ -145,7 +145,14 @@ function SubmitReportModal({ session, onClose, onSaved }: SubmitReportModalProps
       const fileHash = await sha256Hex(file);
 
       setStep('Téléversement de la preuve…');
-      const storagePath = `${session.id}/${Date.now()}_${file.name}`;
+      // Supabase Storage rejette les clés d'objet contenant des accents/
+      // caractères non-ASCII ou certains symboles ("Invalid key") — le nom
+      // de fichier original est assaini (accents retirés, tout caractère
+      // hors [a-zA-Z0-9._-] remplacé par '_') avant de bâtir le chemin.
+      const safeFileName = file.name
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storagePath = `${session.id}/${Date.now()}_${safeFileName}`;
       const { error: uploadErr } = await supabase.storage
         .from('verification-evidence')
         .upload(storagePath, file);
