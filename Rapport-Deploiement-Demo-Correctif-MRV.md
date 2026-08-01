@@ -8,13 +8,15 @@
 
 ## 1. Build
 
-**Statut : ✅ Réussi (validation locale complète, hors sandbox réseau limité)**
+**Statut : ⚠️ Compilation applicative validée conditionnellement ; build Vercel réel encore requis.**
 
-`npm run build` (Next.js 15.5.18) a été exécuté à blanc sur une copie locale de la branche `cleanup/legacy-frontend-audit`. Le webpack compile intégralement et les 45 routes de l'application sont générées sans erreur bloquante.
+*(Correction apportée à la suite de la revue utilisateur du 2026-08-01 — la formulation initiale « ✅ Réussi » était trop forte. Voir ci-dessous la qualification exacte.)*
 
-Un seul point d'échec a été observé, et il est propre au bac à sable d'exécution utilisé pour cette validation, pas à l'application : la police `next/font/google` (`DM Sans`) nécessite un accès réseau à `fonts.googleapis.com` à la construction, et le bac à sable bloque ce domaine par liste blanche (`403 Forbidden`, `X-Proxy-Error: blocked-by-allowlist`). Vercel dispose d'un accès réseau complet et n'aura pas cette restriction. Un test isolé (police temporairement stubée, jamais committé) a confirmé que c'est bien l'unique blocage : une fois ce point neutralisé, la totalité du build passe, `.next/cache` compris.
+`npm run build` (Next.js 15.5.18) a été exécuté sur une copie locale de la branche `cleanup/legacy-frontend-audit`, dans le bac à sable d'exécution de cette session. Le build de la branche exacte, sans modification, a buté sur un blocage réseau : la police `next/font/google` (`DM Sans`) nécessite un accès à `fonts.googleapis.com` à la construction, et ce bac à sable bloque ce domaine par liste blanche (`403 Forbidden`, `X-Proxy-Error: blocked-by-allowlist`). Le build complet (45 routes, zéro erreur webpack) n'a été obtenu qu'après un remplacement **temporaire et non committé** de cet import de police dans la copie de travail locale — jamais dans le dépôt réel (confirmé par `git diff --stat` sur `layout.tsx`, inchangé).
 
-`next.config.mjs` neutralise de toute façon `typescript.ignoreBuildErrors` et `eslint.ignoreDuringBuilds` — aucune erreur TypeScript ou ESLint ne peut faire échouer `next build`.
+Cela établit que le code compile sans erreur webpack/runtime dans ces conditions contrôlées, mais **ne constitue pas une preuve que le build Vercel réel, avec l'accès réseau complet et les vraies variables DEMO, réussira à l'identique** — c'est précisément ce que le déploiement Vercel doit confirmer. Vercel devrait normalement récupérer la police sans difficulté, mais cela reste à vérifier en conditions réelles (§8, étape « Build réel »).
+
+`next.config.mjs` neutralise `typescript.ignoreBuildErrors` et `eslint.ignoreDuringBuilds` — aucune des 24 erreurs TypeScript préexistantes ne peut donc faire échouer `next build`, sur le bac à sable comme sur Vercel. Voir §10 pour le chantier de stabilisation TypeScript identifié pour la suite (hors périmètre de la preview DEMO).
 
 ## 2. Typecheck
 
@@ -83,20 +85,41 @@ Les artefacts SQL synthétiques de ce test ont ensuite été retirés (§6bis) �
 
 ## 8. Débloquer les sections §3, §4, §5 — action requise de votre part
 
-Je n'ai pas d'accès `git push` ni d'identifiants Vercel dans cet environnement d'exécution. Pour poursuivre les tests navigateur, il faut :
+Je n'ai pas d'accès `git push` ni d'identifiants Vercel dans cet environnement d'exécution — cette étape doit être exécutée par vous. Séquence retenue (validée en revue) :
 
-1. **Pousser la branche** (jamais `main`) :
-   ```
-   git push origin cleanup/legacy-frontend-audit
-   ```
-2. **Déployer une preview Vercel** reliée exclusivement à METALVISION-DEMO (nouveau projet Vercel séparé de la prod, ou preview branch déjà configurée vers ce Supabase).
-3. **Variable d'environnement**, sur ce déploiement DEMO **uniquement** :
-   ```
-   NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV=true
-   ```
-   Confirmez qu'elle n'est définie sur aucun déploiement de production.
-4. **Donnez-moi l'URL** obtenue — je peux ensuite naviguer dessus (Claude in Chrome) pour rejouer §3, §4, §5, vérifier les 404 sur les 3 routes supprimées, puis exécuter le cycle `reset_demo → reseed` final une fois le parcours confirmé.
+**Avant le `git push`, vérifier l'isolation des environnements :**
+1. Vérifier le projet Vercel actuel de production : confirmer que ses variables **Preview** ne pointent pas vers le Supabase de production.
+2. Si c'est le cas, désactiver le déploiement automatique de preview pour cette branche, ou définir des variables spécifiques à la branche.
+3. Créer de préférence un projet Vercel distinct dédié : **METALVISION-DEMO-WEB**.
+
+**Pousser uniquement la branche (jamais `main`) :**
+```
+git checkout cleanup/legacy-frontend-audit
+git status
+git log --oneline -8
+git push -u origin cleanup/legacy-frontend-audit
+```
+
+**Configuration du projet Vercel DEMO — variables minimales :**
+```
+NEXT_PUBLIC_SUPABASE_URL=<URL_METALVISION_DEMO>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<ANON_KEY_METALVISION_DEMO>
+NEXT_PUBLIC_DEMO_HIDE_LEGACY_LOGISTICS_NAV=true
+```
+Si utilisées par l'application, également en valeurs DEMO : `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`. Courriels, webhooks, transporteurs, paiements et autres intégrations externes : désactivés ou dirigés vers des destinations de test. Ne pas rattacher `demo.metaltrace.ca` à ce stade — utiliser l'URL Preview Vercel jusqu'à la fin des tests.
+
+**Donnez-moi l'URL Preview obtenue** — je pourrai alors reprendre la régression dans l'ordre : build réel, séparation des environnements (données DEMO uniquement, aucun appel vers la production, flag de navigation actif, logistique masquée du menu mais toujours joignable par URL directe), six comptes, gouvernance MRV en conditions réelles (aucune option `verified` au sélecteur, badge « Vérifié » dérivé d'un `verification_outcome` actif, tentative manuelle rejetée), parcours fonctionnels complets (organisation → capacité → opportunité → projet CCF → activité MRV → vérification → émission → lots → règle de distribution → vente → allocations → règlement), 404 sur `/api/predict` et `/api/aggregator/calculate-sale`, puis le cycle final `reset_demo.sql → 01…06` avec vérification de l'état canonique exact (6 comptes, 600 tCO2e émises, 2 lots, 1 règle active, 1 vente confirmée, 6 allocations).
 
 ## 9. Rappel — arrêt avant fusion
 
-Aucun merge ni push vers `main` n'a été effectué ni ne sera effectué sans votre autorisation explicite, conformément à votre instruction #10.
+Aucun merge ni push vers `main` n'a été effectué ni ne sera effectué sans votre autorisation explicite. La fusion, le redéploiement DEMO depuis `main`, le rattachement de `demo.metaltrace.ca` et le gel de version n'interviendront qu'après un rapport final confirmant la réussite de tous les contrôles ci-dessus et votre autorisation explicite.
+
+## 10. Chantier différé — stabilisation TypeScript (avant pilote commercial)
+
+Point relevé en revue, hors périmètre de la preview DEMO (la branche n'introduit aucune nouvelle erreur — voir §2) mais à traiter avant le pilote commercial fermé (tâche #465) :
+
+- Corriger les 24 erreurs TypeScript préexistantes du projet.
+- Réactiver `typescript.ignoreBuildErrors: false` dans `next.config.mjs` une fois corrigées, pour que le build échoue réellement en cas de régression de typage.
+- Exiger un `tsc --noEmit` propre en CI.
+
+Non commencé — consigné ici pour suivi, à planifier après validation complète de la preview DEMO.
