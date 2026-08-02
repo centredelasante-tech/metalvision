@@ -1639,3 +1639,33 @@ Cinquième bug réel consécutif trouvé uniquement par test de bout en bout en 
 Aucun bug supplémentaire trouvé sur cette portion de la chaîne : les composants déjà livrés et corrigés des Lots 1, 2 et 3 se comportent correctement une fois enchaînés bout en bout dans un scénario neuf, ce qui est la valeur propre d'une régression transverse (confirmer la tenue ensemble de correctifs validés isolément). **Lot 4 étape 2 est close** : la chaîne complète vérification → émission → registre → lot → gouvernance → vente → règlement est validée en production, sans intervention SQL, avec deux bugs réels trouvés et corrigés en cours de route (§24, §25) et aucun autre. Prochaine étape : Lot 4 étape 3 (jeu de données pilote de démonstration).
 
 ---
+
+## 27. Routage post-connexion par rôle réel (`get_my_portal_role()`) — deux bugs d'accès trouvés et corrigés via les tests preview DEMO (2 août 2026)
+
+**Contexte :** `login/page.tsx` et `AppLayout.tsx` déterminaient le portail post-connexion à partir de `app_metadata.role`/`user_metadata.role` du JWT. 5 des 6 comptes démo (tous sauf `superadmin@demo.metaltrace.ca`) n'ont aucune clé `role` dans leur JWT — le statut réel de plusieurs d'entre eux (ex. vérificateur accrédité) vit dans des tables dédiées (`accredited_verifiers`), sans lien avec le JWT.
+
+**1. Correctif central : `public.get_my_portal_role()`**
+Nouvelle RPC (`supabase/carbon_migrations_proposed/14_get_my_portal_role_rpc.sql`) : `STABLE`, `SECURITY DEFINER`, `search_path=''`, zéro paramètre (`auth.uid()` uniquement — ne peut jamais sonder le statut d'un tiers), `REVOKE ALL` puis `GRANT EXECUTE` à `authenticated` seul. Priorité de résolution : `admin` (`is_platform_superadmin()` seule) > `verifier` (`is_authorized_verifier_identity(auth.uid())`, c.-à-d. `accredited_verifiers.active`) > `client` (défaut — couvre à dessein les admins d'organisation/regroupement, rôles scopés à une entité précise, jamais un rôle de portail global).
+
+Appliquée définitivement sur METALVISION-DEMO (`msgesgemaasyzycielzf`), migration distante `20260802032220_get_my_portal_role_rpc`, après un GATE transactionnel (`BEGIN...ROLLBACK`) 15/15 puis un rejeu réel 15/15 sur l'état permanent (6 comptes, appel anonyme rejeté, ACL, `STABLE`, `SECURITY DEFINER`, `search_path` vide, zéro paramètre). Empreinte des données/policies `public` identique avant/après (152 policies, hash `ad90a6f4d01c3a7402d0d24beaeae8c3`) : aucune donnée ni policy modifiée. Non appliquée en production (`dlbewgsoboaycbpypcus`).
+
+`src/lib/auth/getPortalRole.ts` centralise l'appel (point unique) ; `login/page.tsx` et `AppLayout.tsx` l'utilisent exclusivement, avec état de chargement, aucun flash du portail client, garde-fou anti-boucle de redirection, et déconnexion locale explicite sur échec RPC (jamais de repli silencieux vers `'client'`).
+
+**2. Bug réel n°1 — `/admin` accessible à tout compte authentifié**
+Trouvé en testant `operateur@demo.metaltrace.ca` sur la preview Vercel : navigation directe vers `/admin` affichait le contenu complet (stats plateforme, données réelles). Cause : le gate d'accès ne vérifiait que l'absence d'erreur sur `supabase.from('audit_logs').select(..., {count:'exact', head:true})` — or RLS ne lève jamais d'erreur quand elle filtre toutes les lignes, elle retourne simplement 0 ligne. Confirmé en base avec un JWT simulé opérateur : `had_error=false, row_count=0`. Résultat : `isSuperAdmin` passait à `true` pour n'importe quel utilisateur authentifié. Corrigé (`src/app/admin/page.tsx`, commit `9894f72`) en gate sur `getPortalRole() === 'admin'`, avec échec fermé sur toute erreur de résolution.
+
+**3. Bug réel n°2 — `/verifier-mrv` bloquait le vrai vérificateur accrédité**
+Trouvé en testant `verificateur@demo.metaltrace.ca` : connexion et redirection correctes, mais la page affichait « Accès refusé ». Cause : un gate d'accès indépendant et antérieur à ce correctif, lisant d'abord `user_metadata.role` (absent du JWT, même cause racine), puis repliant sur une table `company_members` sans rapport avec le modèle d'accréditation réel (`accredited_verifiers`, migration carbone 05) — 0 ligne pour ce compte, `.single()` renvoyait 406 PostgREST, interprété comme « pas vérificateur ». Corrigé (`src/app/verifier-mrv/page.tsx`, commit `0897de2`) en gate sur `getPortalRole() === 'verifier'`, même source de vérité que `/admin` et le routage.
+
+**4. Correctif cosmétique — badge Topbar**
+`ROLE_BADGE.client` (`src/components/Topbar.tsx`, commit `518c569`) renommé « Client » → « Utilisateur » (initiales `CL` → `UT`) : ce bucket couvre aussi les admins d'organisation/regroupement (opérateur, agrégateur, producteur, recycleur), que « Client » présentait à tort comme de simples clients. Aucun changement de logique de routage.
+
+**5. Validation — 6 comptes sur la preview Vercel DEMO**
+Preview du projet Vercel `metalvision-demo-web` (déploiement « Production » de ce projet, dédié exclusivement à la démo — sans rapport avec la production réelle METALTRACE ; confirmé par lecture directe du bundle client livré : `NEXT_PUBLIC_SUPABASE_URL` = `msgesgemaasyzycielzf.supabase.co`, aucune `SUPABASE_SERVICE_ROLE_KEY` exposée). Après les trois commits ci-dessus, les 6 comptes ont été retestés avec succès sur 8 critères (destination, absence de flash, pas de rebond `/login`, RPC sans repli silencieux, badge, accès métier RLS, navigation legacy masquée, 404 sur `/api/predict` et `/api/aggregator/calculate-sale`) : superadmin → `/admin` ; vérificateur → `/verifier-mrv` ; opérateur, agrégateur, producteur, recycleur → `/`, avec `/admin` refusant l'accès à chacun d'eux. Branche `cleanup/legacy-frontend-audit`, poussée par l'utilisateur (identifiants Git absents du bac à sable agent) ; `main` et la production n'ont pas été touchés.
+
+**6. Rotation du mot de passe démo (post-tests)**
+Le mot de passe temporaire posé sur les 6 comptes pour permettre ces tests ayant transité en clair dans la conversation, il a été rotationné une nouvelle fois sur METALVISION-DEMO (`UPDATE auth.users SET encrypted_password = crypt(...)`, vérifié par comparaison bcrypt post-application sur les 6 comptes). Le nouveau mot de passe est communiqué hors dépôt, comme lors de la rotation précédente — jamais commité en clair.
+
+**État :** les trois correctifs frontend + la RPC sont validés en conditions réelles sur METALVISION-DEMO et sa preview Vercel dédiée. Reste, si autorisé séparément : parcours CCF + Lots carbone 1-3 en navigateur et cycle `reset_demo` → reseed.
+
+---
