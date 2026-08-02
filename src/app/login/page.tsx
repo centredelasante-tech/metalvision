@@ -32,7 +32,22 @@ export default function LoginPage() {
     const { data: { user } } = await supabase.auth.getUser();
     const role = user?.app_metadata?.role ?? user?.user_metadata?.role ?? 'client';
 
-    if (role === 'verifier') {
+    // Un compte accrédité via accredited_verifiers (système carbone,
+    // migrations 04/05 rev23-26) n'a pas forcément le rôle JWT 'verifier'
+    // historique — voir /verifier-mrv/page.tsx pour le même raisonnement et
+    // la référence au commentaire du seed de démo. Sans ce contrôle
+    // supplémentaire, un vérificateur accrédité mais sans rôle JWT atterrit
+    // silencieusement sur le tableau de bord client au lieu de /verifier-mrv.
+    let isAccreditedVerifier = false;
+    if (role !== 'verifier' && user) {
+      const { data, error: accredError } = await supabase.rpc(
+        'is_authorized_verifier_identity',
+        { p_user_id: user.id }
+      );
+      isAccreditedVerifier = !accredError && data === true;
+    }
+
+    if (role === 'verifier' || isAccreditedVerifier) {
       router.push('/verifier-mrv');
     } else if (role === 'admin' || role === 'project_admin') {
       router.push('/admin-dashboard');
