@@ -475,19 +475,47 @@ export default function VerifierMRVPage() {
   const [exportingPdf, setExportingPdf] = useState(false);
 
   // ── Auth check ──────────────────────────────────────────────────────────────
+  // Source de vérité actuelle : accredited_verifiers (système d'accréditation
+  // carbone introduit par les migrations 04/05, rev23-26 — voir
+  // is_assigned_verifier()/is_authorized_verifier_identity() dans les policies
+  // RLS des tables verification_sessions/verification_outcomes). Le seed de
+  // démo (supabase/seeds/demo/01_users_and_roles.sql) le documente
+  // explicitement : "verifier_identity() s'appuient sur accredited_verifiers,
+  // pas le JWT". Cette page en avait pourtant été rédigée avant l'existence de
+  // cette table (commit 9bf3b0c, 3 juillet 2026) et n'avait jamais été
+  // réconciliée : elle ne vérifiait que le rôle JWT historique ou l'ancienne
+  // table company_members (module MRV d'origine), ce qui bloquait tout
+  // vérificateur accrédité via le nouveau mécanisme sans ces attributs legacy.
+  //
+  // is_authorized_verifier_identity(p_user_id) est une fonction SECURITY
+  // DEFINER exécutable par tout utilisateur authentifié (accredited_verifiers
+  // lui-même n'est lisible en direct que par les admins) : elle est donc la
+  // bonne façon d'auto-vérifier son accréditation depuis le client sans
+  // élargir les policies de la table.
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setAuthorized(false); return; }
 
+      const { data: isAccredited, error: accredError } = await supabase.rpc(
+        'is_authorized_verifier_identity',
+        { p_user_id: user.id }
+      );
+      if (!accredError && isAccredited === true) {
+        setAuthorized(true);
+        setCurrentUser({ id: user.id, email: user.email ?? '' });
+        return;
+      }
+
+      // Compat rétroactive : comptes encore rattachés uniquement au mécanisme
+      // JWT/company_members historique, jamais migrés vers accredited_verifiers.
       const roleMeta = user.raw_user_meta_data?.role ?? user.user_metadata?.role;
       if (roleMeta === 'verifier') {
         setAuthorized(true);
         setCurrentUser({ id: user.id, email: user.email ?? '' });
         return;
       }
-      // Check company_members
       const { data: member } = await supabase
         .from('company_members')
         .select('role')
