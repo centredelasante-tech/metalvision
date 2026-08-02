@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
 import { createClient } from '@/lib/supabase/client';
+import { getPortalRole, PORTAL_ROLE_ROUTES, PortalRoleError, type PortalRole } from '@/lib/auth/getPortalRole';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,16 +30,51 @@ export default function LoginPage() {
       return;
     }
 
-    const { data: { user } } = await supabase.auth.getUser();
-    const role = user?.app_metadata?.role ?? user?.user_metadata?.role ?? 'client';
-
-    if (role === 'verifier') {
-      router.push('/verifier-mrv');
-    } else if (role === 'admin' || role === 'project_admin') {
-      router.push('/admin-dashboard');
-    } else {
-      router.push('/');
+    // Rôle de portail résolu côté serveur (RPC get_my_portal_role) — ne
+    // JAMAIS relire app_metadata.role/user_metadata.role ici : ce champ est
+    // absent du JWT pour les comptes dont le statut (ex. vérificateur
+    // accrédité) vit dans une table dédiée (accredited_verifiers), pas dans
+    // le JWT. Voir supabase/carbon_migrations_proposed/14_get_my_portal_role_rpc.sql.
+    let role: PortalRole;
+    try {
+      role = await getPortalRole(supabase);
+    } catch (roleError) {
+      // Aucun repli silencieux vers 'client' : on ne sait pas où envoyer cet
+      // utilisateur, donc on ne le laisse pas dans un état à moitié
+      // authentifié non plus — déconnexion explicite + message d'erreur.
+      //
+      // scope:'local' plutôt que le défaut 'global' : limite la révocation à
+      // CETTE session (n'invalide pas les autres appareils/onglets connectés),
+      // plus approprié pour une erreur de routage que pour une déconnexion
+      // volontaire globale. ATTENTION — vérifié dans le code source installé
+      // (@supabase/auth-js 2.108.2, GoTrueClient.js _signOut) : scope:'local'
+      // N'ÉVITE PAS l'appel réseau — signOut() appelle TOUJOURS POST
+      // /logout?scope=... si un access_token est présent, quel que soit le
+      // scope, et n'efface le stockage local (_removeSession) qu'APRÈS que
+      // cet appel ait réussi ou échoué avec un code ignorable (404/401/403/
+      // session absente). Sur un échec réseau réel (AuthRetryableFetchError,
+      // ex. déconnexion internet), le stockage local N'EST PAS effacé malgré
+      // scope:'local' — ce n'est donc PAS une garantie de nettoyage hors
+      // ligne, seulement une portée de révocation plus étroite. Le try/catch
+      // ci-dessous couvre ce cas (log, pas de blocage de l'affichage de
+      // l'erreur), mais une session locale orpheline reste possible si le
+      // réseau est indisponible au moment précis de cet appel.
+      console.error(roleError);
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch (signOutError) {
+        console.error('Échec de la déconnexion locale après échec RPC get_my_portal_role() :', signOutError);
+      }
+      setError(
+        roleError instanceof PortalRoleError
+          ? 'Connexion réussie mais impossible de déterminer votre espace. Réessayez ou contactez un administrateur.'
+          : 'Une erreur inattendue est survenue. Réessayez.'
+      );
+      setLoading(false);
+      return;
     }
+
+    router.push(PORTAL_ROLE_ROUTES[role]);
     router.refresh();
   };
 

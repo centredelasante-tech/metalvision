@@ -4,10 +4,24 @@ import { useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
 import Icon from '@/components/ui/AppIcon';
 import { createClient } from '@/lib/supabase/client';
+import type { PortalRole } from '@/lib/auth/getPortalRole';
 
 interface TopbarProps {
-  userRole: 'client' | 'admin';
+  userRole: PortalRole;
 }
+
+// Libellé du badge 'client' volontairement neutre : ce bucket de PortalRole
+// (routage frontend uniquement, cf. getPortalRole.ts) regroupe aussi bien un
+// client final que les admins scopés à une organisation ou un regroupement
+// (opérateur, agrégateur, producteur, recycleur — cf. matrice des 6 comptes
+// démo dans supabase/carbon_migrations_proposed/14_get_my_portal_role_rpc.sql).
+// « Client » les présenterait à tort comme de simples clients ; « Utilisateur »
+// reste correct pour tous. Aucun changement de la logique de routage.
+const ROLE_BADGE: Record<PortalRole, { initials: string; label: string }> = {
+  admin: { initials: 'AD', label: 'Administrateur' },
+  verifier: { initials: 'VE', label: 'Vérificateur' },
+  client: { initials: 'UT', label: 'Utilisateur' },
+};
 
 interface MetalPrice {
   label: string;
@@ -217,11 +231,11 @@ export default function Topbar({ userRole }: TopbarProps) {
         <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-lg">
           <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
             <span className="text-primary-foreground text-[10px] font-700">
-              {userRole === 'admin' ? 'AD' : 'CL'}
+              {ROLE_BADGE[userRole].initials}
             </span>
           </div>
           <span className="text-xs font-600 text-foreground">
-            {userRole === 'admin' ? 'Administrateur' : 'Client'}
+            {ROLE_BADGE[userRole].label}
           </span>
         </div>
 
@@ -229,7 +243,20 @@ export default function Topbar({ userRole }: TopbarProps) {
         <button
           onClick={async () => {
             const supabase = createClient();
-            await supabase.auth.signOut();
+            // scope:'local' : ce bouton déconnecte CET appareil/onglet, pas
+            // les autres sessions actives de l'utilisateur (comportement plus
+            // proche de ce qu'un bouton "Déconnexion" standard laisse
+            // attendre — aucune justification produit de vouloir révoquer
+            // toutes les sessions depuis ce bouton). N'évite PAS l'appel
+            // réseau : @supabase/auth-js 2.108.2 appelle toujours le serveur
+            // quel que soit le scope (cf. commentaire détaillé dans
+            // login/page.tsx) — le try/catch journalise un échec réseau
+            // éventuel sans bloquer la redirection.
+            try {
+              await supabase.auth.signOut({ scope: 'local' });
+            } catch (signOutError) {
+              console.error('Échec de la déconnexion :', signOutError);
+            }
             router.push('/login');
           }}
           className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg btn-ghost text-muted-foreground hover:text-foreground"
