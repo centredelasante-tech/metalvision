@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
+import { getPortalRole } from '@/lib/auth/getPortalRole';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -475,34 +476,55 @@ export default function VerifierMRVPage() {
   const [exportingPdf, setExportingPdf] = useState(false);
 
   // ── Auth check ──────────────────────────────────────────────────────────────
+  // CORRIGÉ (bug réel trouvé lors des tests preview du 2026-08-02) : l'ancien
+  // gate lisait d'abord app_metadata/user_metadata.role (absent du JWT pour
+  // tous les comptes démo sauf superadmin — cause racine documentée dans
+  // supabase/carbon_migrations_proposed/14_get_my_portal_role_rpc.sql), puis
+  // repliait sur une table `company_members` qui n'a plus aucun rapport avec
+  // le modèle d'accréditation réel (public.accredited_verifiers, migration
+  // carbone 05). Le compte vérificateur démo n'a aucune ligne dans
+  // `company_members` : `.single()` sur 0 ligne renvoie 406 (comportement
+  // PostgREST standard, pas une erreur RLS), silencieusement interprété comme
+  // "pas vérificateur" -> blocage total, y compris pour le vrai vérificateur
+  // accrédité.
+  //
+  // Remplacé par la même source de vérité que le routage post-connexion et
+  // que /admin : getPortalRole() -> RPC public.get_my_portal_role()
+  // (SECURITY DEFINER, teste réellement accredited_verifiers.active via
+  // is_authorized_verifier_identity(auth.uid()), testée 15/15 sur les 6
+  // comptes démo). Accès accordé uniquement si le rôle résolu est
+  // explicitement 'verifier'. Toute erreur de résolution refuse l'accès par
+  // défaut (jamais de repli silencieux vers un accès accordé ou refusé par
+  // erreur d'infrastructure non distinguée d'un vrai refus).
   useEffect(() => {
+    let cancelled = false;
     const checkAuth = async () => {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setAuthorized(false); return; }
-
-      const roleMeta = user.raw_user_meta_data?.role ?? user.user_metadata?.role;
-      if (roleMeta === 'verifier') {
-        setAuthorized(true);
-        setCurrentUser({ id: user.id, email: user.email ?? '' });
+      if (!user) {
+        if (!cancelled) setAuthorized(false);
         return;
       }
-      // Check company_members
-      const { data: member } = await supabase
-        .from('company_members')
-        .select('role')
-        .eq('user_id', user.id)
-        .limit(1)
-        .single();
 
-      if (member?.role === 'verifier') {
-        setAuthorized(true);
-        setCurrentUser({ id: user.id, email: user.email ?? '' });
-      } else {
+      try {
+        const role = await getPortalRole(supabase);
+        if (cancelled) return;
+        if (role === 'verifier') {
+          setAuthorized(true);
+          setCurrentUser({ id: user.id, email: user.email ?? '' });
+        } else {
+          setAuthorized(false);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error(err);
         setAuthorized(false);
       }
     };
     checkAuth();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ── Fetch sessions (Tab 1) ──────────────────────────────────────────────────
