@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import Icon from '@/components/ui/AppIcon';
 import { MetricCardSkeleton, TableRowSkeleton } from '@/components/ui/LoadingSkeleton';
+import { getPortalRole } from '@/lib/auth/getPortalRole';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,18 +210,40 @@ export default function AdminPage() {
   const [mandateActionsLoading, setMandateActionsLoading] = useState(true);
 
   // ── Access gate ─────────────────────────────────────────────────────────────
-  // Probe audit_logs — RLS policy "audit_logs_superadmin_select" uses
-  // is_platform_superadmin() as its USING clause. A successful query (no error)
-  // confirms the current user satisfies is_platform_superadmin().
+  // CORRIGÉ (bug réel trouvé lors des tests preview du 2026-08-02) : l'ancien
+  // probe (`SELECT ... FROM audit_logs` et vérifier l'absence d'erreur) était
+  // structurellement faux. RLS ne lève PAS d'erreur quand elle filtre toutes
+  // les lignes — elle retourne simplement 0 résultat, silencieusement. Un
+  // utilisateur authentifié non-superadmin obtenait donc error=null (juste
+  // 0 ligne), et `!error` valait true : n'importe quel compte connecté se
+  // voyait donc accorder isSuperAdmin=true, quel que soit son rôle réel.
+  // Prouvé en base sur METALVISION-DEMO avec operateur@demo.metaltrace.ca :
+  // had_error=false, row_count=0.
+  //
+  // Le gate utilise maintenant la même source de vérité que le routage
+  // post-connexion (getPortalRole() -> RPC public.get_my_portal_role(),
+  // SECURITY DEFINER, testée 15/15 sur les 6 comptes démo) : accès admin
+  // uniquement si le rôle résolu est explicitement 'admin'. Toute erreur de
+  // résolution refuse l'accès par défaut (jamais de repli silencieux vers
+  // isSuperAdmin=true).
   useEffect(() => {
+    let cancelled = false;
     const supabase = createClient();
-    supabase
-      .from('audit_logs')
-      .select('id', { count: 'exact', head: true })
-      .then(({ error }) => {
-        setIsSuperAdmin(!error);
+    getPortalRole(supabase)
+      .then((role) => {
+        if (cancelled) return;
+        setIsSuperAdmin(role === 'admin');
+        setAccessChecked(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        setIsSuperAdmin(false);
         setAccessChecked(true);
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ── Platform stats ──────────────────────────────────────────────────────────
