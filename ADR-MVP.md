@@ -1669,3 +1669,28 @@ Le mot de passe temporaire posé sur les 6 comptes pour permettre ces tests ayan
 **État :** les trois correctifs frontend + la RPC sont validés en conditions réelles sur METALVISION-DEMO et sa preview Vercel dédiée. Reste, si autorisé séparément : parcours CCF + Lots carbone 1-3 en navigateur et cycle `reset_demo` → reseed.
 
 ---
+
+## 28. `get_my_portal_role()` appliquée et validée en production — backend prêt pour le déploiement de `main` (6 août 2026)
+
+**Contexte :** suite au GATE de préparation du déploiement production (lecture seule, voir `RAPPORT-REGRESSION-DEMO-FINAL.md` section 11), deux décisions restaient en attente avant toute reconnexion Vercel : corriger la migration `20260801010000` (retirer un `DROP POLICY` reposant sur une affirmation fausse — la policy `ccf_projects_via_user_project_ids` est en réalité présente et active en production) et statuer sur l'application de `get_my_portal_role()` (§27) en production. L'utilisateur a tranché les deux.
+
+**1. Correctif `20260801010000`**
+Le `STEP 3` (`DROP POLICY ccf_projects_via_user_project_ids`) est retiré de `supabase/migrations/20260801010000_reconcile_project_participants_ccf_projects_with_production.sql` — cette migration corrigée ne touche plus du tout cette policy. Sa suppression éventuelle redevient une décision strictement séparée, non prise. Divergence entre la version historiquement appliquée à DEMO (avec l'ancien `STEP 3`) et la version corrigée du dépôt documentée dans `supabase/MIGRATIONS_TIMELINE.md` (empreintes SHA-256 des deux versions). Commit `ba271bb`, poussé sur `main`. Aucun fichier frontend touché (`git diff 869827d ba271bb -- src/` vide). Cette migration corrigée reste **non appliquée en production**.
+
+**2. Application de `get_my_portal_role()` en production**
+Exécutée directement sur `dlbewgsoboaycbpypcus` dans une transaction unique (`BEGIN...COMMIT`), conditionnée à la réussite de tous les contrôles catalogue et comportementaux — tout échec aurait provoqué un `ROLLBACK` automatique. Une première tentative a effectivement échoué sur une assertion de test trop stricte (bug du test, pas de la fonction) : `ROLLBACK` automatique confirmé, absence de la fonction reconfirmée en lecture seule avant de relancer intégralement depuis `BEGIN` — aucune trace laissée, pas un incident production.
+
+Transaction finale : prérequis vérifiés (`is_platform_superadmin()`, `is_authorized_verifier_identity(uuid)`, déjà présents), création de la fonction (texte strictement identique à `carbon_migrations_proposed/14_get_my_portal_role_rpc.sql`), `REVOKE ALL` puis `GRANT EXECUTE` à `authenticated` seul, gate catalogue (`prosecdef=true`, `proconfig={search_path=""}`, ACL `anon=false/authenticated=true/public=false`), gate comportemental sous le rôle `authenticated` (pas superuser) sur **3 identités réelles de production** : admin → `'admin'`, vérificateur accrédité actif → `'verifier'`, client → `'client'`. `COMMIT` exécuté à 12:04:15 UTC le 2026-08-06.
+
+Post-COMMIT : empreinte données/policies strictement identique avant/après (`n_users=9, n_accredited_verifiers=1, n_org_members=3, n_organizations=4, n_policies_public=147`, même `policies_fingerprint=c83662a2129b4d9e5720b88a4fcad721`) ; seul `n_functions_public` passe de 356 à 357 — exactement la fonction créée, rien d'autre touché. Re-vérification indépendante post-COMMIT : `anon` correctement rejeté (`insufficient_privilege`) avant même d'atteindre le corps de la fonction. Non inscrite dans `supabase_migrations.schema_migrations` (production s'arrête toujours à `20260722134537`) — cohérent avec un mode d'application SQL brut, constaté en direct plutôt que supposé, conformément à l'instruction du projet de toujours comparer les objets live. Détail complet : `RAPPORT-REGRESSION-DEMO-FINAL.md` section 12.
+
+**3. Statut du fichier de migration 14**
+L'en-tête de `carbon_migrations_proposed/14_get_my_portal_role_rpc.sql` (qui affirmait « NON appliquée en production — décision séparée en attente ») est corrigé pour refléter l'application réelle sur DEMO et sur production, avec la date, l'heure, le mode d'application et l'empreinte données/policies. Le contenu fonctionnel de la fonction (STEP 1/2/3) est inchangé.
+
+**4. Portée inchangée — ce qui n'a PAS été fait**
+Aucune reconnexion de l'intégration Git Vercel du projet `metalvision`, aucun build, aucun déploiement sur `metaltrace.ca`, aucune autre migration, aucun `migration repair`, aucune modification des variables de production. Le prochain GATE (distinct) portera exclusivement sur la reconnexion contrôlée de Vercel, le build de `main` et les smoke tests de production, avec possibilité de réassigner immédiatement le déploiement antérieur (`1dd9d39`) en cas d'échec.
+
+**5. Conclusion**
+Le backend requis par le frontend de `main` (commit `869827d`, fusionné en section 10 du rapport de régression) est désormais prêt côté production : `get_my_portal_role()`, seule dépendance backend réellement requise par ce frontend et absente jusqu'ici, est appliquée, validée par 3 identités réelles, et n'a modifié aucune donnée ni policy existante. **Verdict : BACKEND PRÊT POUR DÉPLOIEMENT.**
+
+---

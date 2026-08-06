@@ -69,6 +69,20 @@ non encore validée par un test comportemental, voir bandeau en tête du fichier
 **Ce document ne constitue pas une autorisation d'appliquer la version corrigée à la
 production** — cette migration reste, à ce stade, non appliquée en production.
 
+## Statut production — `carbon_migrations_proposed/14_get_my_portal_role_rpc.sql`
+
+**Appliquée définitivement en production (`dlbewgsoboaycbpypcus`) le 2026-08-06 à
+12:04:15 UTC.**
+
+| | |
+|---|---|
+| Mode d'application | SQL brut exécuté directement en base (transaction unique, `BEGIN...COMMIT`), **hors de l'outil de migration Supabase** — pas un `supabase db push` |
+| Empreinte SHA-256 du fichier `14_get_my_portal_role_rpc.sql` (après mise à jour du bandeau de statut, 2026-08-06) | `8a1ed1f139bd9348f59cf6e555ae6a56cb9b520900a200a1cec178d5617493ec` — le contenu fonctionnel de la fonction (STEP 1/2/3) est strictement identique à celui exécuté en production ; seul l'en-tête documentaire a été corrigé après application |
+| Empreinte données/policies avant/après (production) | Identique : `n_users=9, n_accredited_verifiers=1, n_org_members=3, n_organizations=4, n_policies_public=147, policies_fingerprint=c83662a2129b4d9e5720b88a4fcad721` ; seul `n_functions_public` passe de 356 à 357 (exactement la fonction créée) |
+| **Statut dans `supabase_migrations.schema_migrations` (production)** — constaté en direct, jamais supposé | **Non inscrite.** La dernière version enregistrée dans cette table sur production est `20260722134537` (« 08_carbon_lots_commercial_cycle ») — confirmé par requête directe le 2026-08-06, après l'application de `get_my_portal_role()`. Cohérent avec le mode d'application (SQL brut, hors outil de migration) : cette table ne reflète que les migrations appliquées via l'outil CLI/dashboard Supabase, pas les `execute_sql` directs. |
+| Statut dans `schema_migrations` de METALVISION-DEMO | Inscrite : `20260802032220_get_my_portal_role_rpc` (application du 2026-08-02, via l'outil de migration) |
+| Détail complet des contrôles (catalogue + comportemental, 3 identités réelles) | Voir `RAPPORT-REGRESSION-DEMO-FINAL.md`, section 12.2-12.3 |
+
 ## Pourquoi le décalage de nom
 
 Les 2 fichiers `20260713*` documentent une investigation et un correctif RLS réellement menés

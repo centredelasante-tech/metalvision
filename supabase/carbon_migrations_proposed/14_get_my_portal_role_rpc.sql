@@ -2,16 +2,44 @@
 -- Migration 14 — RPC public.get_my_portal_role()
 --                Rôle de PORTAIL (routage frontend) pour l'utilisateur courant
 --
--- STATUT : APPLIQUÉE DÉFINITIVEMENT sur METALVISION-DEMO (msgesgemaasyzycielzf)
--- le 2026-08-02, migration distante "20260802032220_get_my_portal_role_rpc",
--- après GATE transactionnel (BEGIN...ROLLBACK) 15/15 puis rejeu réel 15/15 sur
--- l'état permanent (comptes, ACL, STABLE, SECURITY DEFINER, search_path vide,
--- zéro paramètre). Empreinte des données/policies public identique avant/après
--- (n_users=6, n_accredited_verifiers=1, n_org_members=3, n_organizations=3,
--- n_policies_public=152, policies_fingerprint=ad90a6f4d01c3a7402d0d24beaeae8c3)
--- : aucune donnée ni policy modifiée par cette migration, uniquement l'objet de
--- catalogue et ses privilèges. NON appliquée en production (dlbewgsoboaycbpypcus)
--- — décision séparée en attente.
+-- STATUT AU 2026-08-06 :
+-- - appliquée définitivement sur METALVISION-DEMO (msgesgemaasyzycielzf) le
+--   2026-08-02, migration distante "20260802032220_get_my_portal_role_rpc",
+--   après GATE transactionnel (BEGIN...ROLLBACK) 15/15 puis rejeu réel 15/15
+--   sur l'état permanent (comptes, ACL, STABLE, SECURITY DEFINER, search_path
+--   vide, zéro paramètre). Empreinte des données/policies public identique
+--   avant/après (n_users=6, n_accredited_verifiers=1, n_org_members=3,
+--   n_organizations=3, n_policies_public=152,
+--   policies_fingerprint=ad90a6f4d01c3a7402d0d24beaeae8c3) : aucune donnée ni
+--   policy modifiée par cette application.
+-- - appliquée définitivement sur METALVISION production (dlbewgsoboaycbpypcus)
+--   le 2026-08-06 à 12:04:15 UTC, exécutée directement en base (SQL brut, hors
+--   outil de migration Supabase — voir supabase/MIGRATIONS_TIMELINE.md pour le
+--   statut réel dans schema_migrations, constaté en direct, jamais supposé) ;
+-- - validation production : prérequis conformes (is_platform_superadmin(),
+--   is_authorized_verifier_identity(uuid) déjà présents), SECURITY DEFINER
+--   confirmé, search_path vide confirmé, ACL minimales confirmées
+--   (anon=false, authenticated=true, public=false) et matrice admin/verifier/
+--   client validée sur 3 identités RÉELLES de production sous le rôle
+--   authenticated (pas superuser) ;
+-- - aucune donnée, table ou policy modifiée par cette application (empreinte
+--   données/policies identique avant/après : n_users=9,
+--   n_accredited_verifiers=1, n_org_members=3, n_organizations=4,
+--   n_policies_public=147, policies_fingerprint=c83662a2129b4d9e5720b88a4fcad721
+--   — seul n_functions_public passe de 356 à 357, exactement cette fonction).
+--
+-- Cette fonction reste, comme avant son application, UNIQUEMENT un helper de
+-- ROUTAGE FRONTEND (quel portail afficher après connexion) : elle NE
+-- CONSTITUE JAMAIS UNE AUTORISATION. Toute vérification d'accès réelle
+-- continue de passer par les policies RLS et par is_platform_superadmin() /
+-- is_organization_owner() / is_aggregator_primary_admin() /
+-- is_authorized_verifier_identity() / is_assigned_verifier() évaluées côté
+-- serveur sur chaque requête protégée — inchangé par cette application.
+--
+-- Le ROLLBACK (voir bandeau en fin de fichier) reste couplé au retour
+-- préalable du frontend vers une version n'appelant pas cette RPC — ce
+-- couplage était déjà documenté avant cette mise à jour de statut et demeure
+-- exact.
 -- =============================================================================
 --
 -- CHANGEMENTS PAR RAPPORT À LA v1 (revue utilisateur du 2026-08-01) :
