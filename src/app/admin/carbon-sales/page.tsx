@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Icon from '@/components/ui/AppIcon';
+import AppLayout from '@/components/AppLayout';
 
 // ============================================================================
 // /admin/carbon-sales
@@ -802,6 +803,7 @@ export default function AdminCarbonSalesPage() {
   const draftCount = sales.filter((s) => s.status === 'draft').length;
 
   return (
+    <AppLayout activeRoute="/admin">
     <div className="min-h-screen bg-background">
       <div className="max-w-6xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-8">
@@ -886,5 +888,6 @@ export default function AdminCarbonSalesPage() {
         <SaleDetailPanel sale={selectedSale} onClose={() => setSelectedSale(null)} onChanged={fetchAll} />
       )}
     </div>
+    </AppLayout>
   );
 }

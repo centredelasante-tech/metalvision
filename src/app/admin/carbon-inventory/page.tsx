@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Icon from '@/components/ui/AppIcon';
+import AppLayout from '@/components/AppLayout';
 
 // ============================================================================
 // /admin/carbon-inventory
@@ -1009,6 +1010,7 @@ export default function AdminCarbonInventoryPage() {
   const totalAvailableLots = lots.filter((l) => l.commercial_status === 'available').reduce((s, l) => s + Number(l.quantity_tco2e), 0);
 
   return (
+    <AppLayout activeRoute="/admin">
     <div className="min-h-screen bg-background">
       <div className="max-w-6xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-8">
@@ -1173,5 +1175,6 @@ export default function AdminCarbonInventoryPage() {
         <IssuanceDetailPanel issuance={selectedIssuance} onClose={() => setSelectedIssuance(null)} onChanged={fetchAll} />
       )}
     </div>
+    </AppLayout>
   );
 }
