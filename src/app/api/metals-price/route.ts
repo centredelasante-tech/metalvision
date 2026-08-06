@@ -54,9 +54,18 @@ export async function GET() {
 
   try {
     const url = `https://api.metals.dev/v1/latest?api_key=${apiKey}&currency=CAD&unit=kg`;
-    const res = await fetch(url, { next: { revalidate: 600 } });
+    // TEMP DIAGNOSTIC (2026-08-06): cache: 'no-store' bypasses Next.js Data Cache
+    // so we stop guessing whether a stale cached error is being served.
+    // Revert to { next: { revalidate: 600 } } once the 502 is diagnosed.
+    const res = await fetch(url, { cache: 'no-store' });
 
     if (!res.ok) {
+      // TEMP DIAGNOSTIC (2026-08-06): log real upstream status/body server-side only.
+      // Never exposed to the client — visible in Vercel Function Logs.
+      const bodyText = await res.text().catch(() => '<unreadable body>');
+      console.error(
+        `[metals-price] upstream non-ok: status=${res.status} statusText=${res.statusText} body=${bodyText.slice(0, 500)}`
+      );
       throw new Error(`Metals.Dev API returned ${res.status}`);
     }
 
@@ -113,6 +122,8 @@ export async function GET() {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Fetch failed';
+    // TEMP DIAGNOSTIC (2026-08-06): server-side only, never exposed to the client.
+    console.error(`[metals-price] caught error before/around fetch: ${message}`, err);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }
