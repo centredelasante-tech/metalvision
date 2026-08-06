@@ -774,14 +774,20 @@ export default function AdminCarbonSalesPage() {
   const [selectedSale, setSelectedSale] = useState<CreditSale | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showNewSale, setShowNewSale] = useState(false);
+  // UX guard uniquement — create_credit_sale() reste seule autorité réelle
+  // (is_org_admin(seller_organization_id)) ; ce flag évite simplement
+  // d'afficher un bouton qui échouerait pour un rôle non-admin de
+  // l'organisation opératrice (ex. vérificateur).
+  const [isOperatorAdmin, setIsOperatorAdmin] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setListError('');
     const supabase = createClient();
-    const [opRes, salesRes] = await Promise.all([
+    const [opRes, salesRes, sessionRes] = await Promise.all([
       supabase.from('platform_operators').select('organization_id, organizations(name)').is('revoked_at', null).maybeSingle(),
       supabase.from('credit_sales').select(SALE_SELECT).order('created_at', { ascending: false }),
+      supabase.auth.getSession(),
     ]);
     const errors = [opRes.error, salesRes.error].filter(Boolean);
     if (errors.length > 0) {
@@ -789,9 +795,27 @@ export default function AdminCarbonSalesPage() {
       setLoading(false);
       return;
     }
-    setOperatorOrgId(opRes.data?.organization_id ?? null);
+    const opOrgId = opRes.data?.organization_id ?? null;
+    setOperatorOrgId(opOrgId);
     setOperatorOrgName((opRes.data as any)?.organizations?.name ?? opRes.data?.organization_id ?? '');
     setSales((salesRes.data ?? []) as unknown as CreditSale[]);
+
+    const uid = sessionRes.data.session?.user?.id ?? null;
+    const superadmin = sessionRes.data.session?.user?.app_metadata?.role === 'admin';
+    if (opOrgId && uid) {
+      const { data: opAdmin } = await supabase
+        .from('organization_members')
+        .select('id')
+        .eq('organization_id', opOrgId)
+        .eq('user_id', uid)
+        .eq('org_role', 'admin')
+        .eq('status', 'active')
+        .maybeSingle();
+      setIsOperatorAdmin(!!opAdmin || superadmin);
+    } else {
+      setIsOperatorAdmin(superadmin);
+    }
+
     setLoading(false);
   }, []);
 
@@ -811,7 +835,7 @@ export default function AdminCarbonSalesPage() {
             <h1 className="text-2xl font-700 text-foreground">Cockpit de ventes</h1>
             <p className="text-sm text-muted-foreground mt-1">Ventes de crédits carbone → coûts → confirmation → répartition → règlement</p>
           </div>
-          {operatorOrgId && (
+          {operatorOrgId && isOperatorAdmin && (
             <button onClick={() => setShowNewSale(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-600 flex items-center gap-2">
               <Icon name="PlusIcon" size={16} />
               Nouvelle vente
@@ -881,7 +905,7 @@ export default function AdminCarbonSalesPage() {
         )}
       </div>
 
-      {showNewSale && operatorOrgId && (
+      {showNewSale && operatorOrgId && isOperatorAdmin && (
         <NewSaleModal operatorOrgId={operatorOrgId} operatorOrgName={operatorOrgName} onClose={() => setShowNewSale(false)} onCreated={fetchAll} />
       )}
       {selectedSale && (
