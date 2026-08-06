@@ -33,6 +33,11 @@ interface MandateAction {
   description: string | null;
 }
 
+interface AggregatorSummary {
+  id: string;
+  name: string;
+}
+
 // ─── Static Catalogues ────────────────────────────────────────────────────────
 // NOTE (revue PR) : mandate_actions est une vraie table seedée en base
 // (supabase/migrations/20260710003000_ccf_003_mandates.sql), pas un ENUM —
@@ -189,9 +194,20 @@ const QUICK_LINKS = [
   { href: '/admin-carbon-projects',      label: 'Projets Carbone MRV',   icon: 'FolderIcon',      desc: 'Gestion ISO 14064-2' },
   { href: '/admin-verification-sessions', label: 'Sessions de vérification', icon: 'CheckBadgeIcon', desc: 'Vérifications tierces' },
   { href: '/admin/carbon-inventory', label: 'Inventaire carbone', icon: 'ArchiveBoxIcon', desc: 'Résultats → émissions → lots commercialisables' },
-  { href: '/admin/regroupements/11111111-1111-1111-1111-111111111111/distribution', label: 'Gouvernance distribution (test)', icon: 'ScaleIcon', desc: 'Règles de distribution et overrides — Regroupement Test E2E' },
   { href: '/admin/carbon-sales', label: 'Cockpit de ventes', icon: 'BanknotesIcon', desc: 'Ventes de crédits carbone — coûts, confirmation, répartition, règlement' },
 ];
+
+// NOTE (correctif régression) : le lien vers la gouvernance/distribution
+// (Lot 2) pointait auparavant vers un UUID de regroupement codé en dur
+// ("Regroupement Test E2E"), qui n'existe pas dans tous les environnements
+// (ex. METALVISION-DEMO) — lien mort en dehors du contexte où cet UUID a été
+// créé. Il est maintenant résolu dynamiquement : la liste des regroupements
+// réellement accessibles (RLS `aggregators_superadmin_all` : le superadmin
+// voit tous les regroupements) est chargée en direct, et une carte d'accès
+// rapide est générée par regroupement, pointant vers la route canonique
+// /admin/regroupements/[aggregatorId]/distribution. Aucune route de liste
+// dédiée n'existe encore (`/admin/regroupements`) ; tant que ce n'est pas
+// construit, ce hub reste le seul point d'entrée vers la gouvernance.
 
 export default function AdminPage() {
   const [accessChecked, setAccessChecked] = useState(false);
@@ -208,6 +224,8 @@ export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [mandateActions, setMandateActions] = useState<MandateAction[]>([]);
   const [mandateActionsLoading, setMandateActionsLoading] = useState(true);
+  const [aggregators, setAggregators] = useState<AggregatorSummary[]>([]);
+  const [aggregatorsLoading, setAggregatorsLoading] = useState(true);
 
   // ── Access gate ─────────────────────────────────────────────────────────────
   // CORRIGÉ (bug réel trouvé lors des tests preview du 2026-08-02) : l'ancien
@@ -333,6 +351,26 @@ export default function AdminPage() {
     if (isSuperAdmin) fetchMandateActions();
   }, [isSuperAdmin, fetchMandateActions]);
 
+  // ── Regroupements accessibles (résolution dynamique du lien Gouvernance) ────
+  // Le superadmin voit tous les regroupements via la policy RLS
+  // aggregators_superadmin_all — aucun UUID codé en dur, aucune hypothèse sur
+  // le nombre de regroupements existants dans l'environnement courant.
+  const fetchAggregators = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    setAggregatorsLoading(true);
+    const supabase = createClient();
+    const { data } = await supabase
+      .from('aggregators')
+      .select('id, name')
+      .order('name');
+    setAggregators((data as AggregatorSummary[]) ?? []);
+    setAggregatorsLoading(false);
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
+    if (isSuperAdmin) fetchAggregators();
+  }, [isSuperAdmin, fetchAggregators]);
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   if (!accessChecked) {
@@ -427,6 +465,33 @@ export default function AdminPage() {
                     <Icon name="ChevronRightIcon" size={14} className="text-muted-foreground ml-auto flex-shrink-0" />
                   </a>
                 ))}
+
+                {aggregatorsLoading ? (
+                  <div className="flex items-center gap-3 p-4 bg-card border border-border rounded-xl">
+                    <div className="w-9 h-9 rounded-lg bg-muted flex-shrink-0 animate-pulse" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="h-3 w-32 bg-muted rounded animate-pulse" />
+                      <div className="h-2.5 w-44 bg-muted rounded animate-pulse" />
+                    </div>
+                  </div>
+                ) : (
+                  aggregators.map((agg) => (
+                    <a
+                      key={agg.id}
+                      href={`/admin/regroupements/${agg.id}/distribution`}
+                      className="flex items-center gap-3 p-4 bg-card border border-border rounded-xl hover:border-primary/50 hover:bg-accent/30 transition-colors group"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center flex-shrink-0 group-hover:bg-primary/10 transition-colors">
+                        <Icon name="ScaleIcon" size={18} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-600 text-foreground">Gouvernance distribution — {agg.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">Règles de distribution et overrides membres</p>
+                      </div>
+                      <Icon name="ChevronRightIcon" size={14} className="text-muted-foreground ml-auto flex-shrink-0" />
+                    </a>
+                  ))
+                )}
               </div>
             </div>
           </div>
