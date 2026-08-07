@@ -86,8 +86,29 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   const [companyName, setCompanyName] = useState<string | null>(null);
   const [memberRole, setMemberRole] = useState<string | null>(null);
   const [submittedLotsCount, setSubmittedLotsCount] = useState<number>(0);
+  // Non-null uniquement si l'utilisateur courant est primary_admin actif
+  // d'au moins un regroupement (aggregator_admins.role='primary_admin',
+  // revoked_at IS NULL) — ajoute dynamiquement le lien de navigation vers
+  // l'écran de gouvernance/distribution de CE regroupement (#589 : ce lien
+  // était totalement absent du menu latéral, seule une URL directe
+  // permettait d'y accéder). UX seulement — /admin/regroupements/[id]/
+  // distribution applique elle-même sa propre vérification de rôle
+  // (is_aggregator_admin() côté RLS) avant d'exposer quoi que ce soit.
+  const [primaryAdminAggregatorId, setPrimaryAdminAggregatorId] = useState<string | null>(null);
 
-  const rawNavItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : clientNav;
+  const dynamicClientNav: NavItem[] = primaryAdminAggregatorId
+    ? [
+        ...clientNav,
+        {
+          label: 'Regroupement',
+          href: `/admin/regroupements/${primaryAdminAggregatorId}/distribution`,
+          icon: 'UserGroupIcon',
+          group: 'réseau',
+        },
+      ]
+    : clientNav;
+
+  const rawNavItems = userRole === 'admin' ? adminNav : userRole === 'verifier' ? verifierNav : dynamicClientNav;
   const navItems = HIDE_LEGACY_LOGISTICS_NAV
     ? rawNavItems.filter((n) => !n.legacyLogisticsUI)
     : rawNavItems;
@@ -109,6 +130,17 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
           setMemberRole((data.org_role as string) ?? null);
           const name = (data.organizations as { name: string } | null)?.name ?? null;
           setCompanyName(name);
+        });
+      supabase
+        .from('aggregator_admins')
+        .select('aggregator_id')
+        .eq('user_id', user.id)
+        .eq('role', 'primary_admin')
+        .is('revoked_at', null)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data }) => {
+          setPrimaryAdminAggregatorId((data as { aggregator_id: string } | null)?.aggregator_id ?? null);
         });
     });
   }, [userRole]);
