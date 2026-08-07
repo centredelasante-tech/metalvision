@@ -167,9 +167,9 @@ describe('RLS Permission Logic', () => {
   });
 
   test('project_client can only read own project data', () => {
-    const clientId = 'client-uuid-123';
-    const projectClientId = 'client-uuid-123';
-    const otherClientId = 'client-uuid-456';
+    const clientId: string = 'client-uuid-123';
+    const projectClientId: string = 'client-uuid-123';
+    const otherClientId: string = 'client-uuid-456';
 
     // Client can access own project
     expect(projectClientId === clientId).toBe(true);

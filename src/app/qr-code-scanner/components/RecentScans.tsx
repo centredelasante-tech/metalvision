@@ -59,7 +59,7 @@ export default function RecentScans() {
 
         const enriched = data.map((s) => ({
           ...s,
-          containers: s.containers as ScanEvent['containers'],
+          containers: s.containers as unknown as ScanEvent['containers'],
           lot_count: lotCountMap[s.container_id] ?? 0,
         }));
 

@@ -82,7 +82,7 @@ export default function ContainerResult({ container, error, onReset }: Container
           Démarrer un nouveau lot
         </Link>
         <Link
-          href={`/container-detail?id=${container.id}`}
+          href={`/container-detail/${container.id}`}
           className="flex-1 py-3 rounded-lg text-sm font-600 border border-border text-foreground btn-ghost flex items-center justify-center gap-2 min-h-[44px]"
         >
           <Icon name="ClockIcon" size={18} />

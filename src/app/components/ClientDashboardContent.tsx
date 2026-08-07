@@ -43,7 +43,8 @@ export default function ClientDashboardContent() {
         .limit(1)
         .single()
         .then(({ data }) => {
-          const name = (data?.organizations as { name: string } | null)?.name ?? null;
+          const orgsRel: any = (data as any)?.organizations ?? null;
+          const name: string | null = Array.isArray(orgsRel) ? orgsRel[0]?.name ?? null : orgsRel?.name ?? null;
           if (name) {
             setCompanyName(name);
             return;

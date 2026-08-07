@@ -349,7 +349,7 @@ export default function OrganizationDetailPage() {
     }
 
     setOrg(orgRes.data as Organization ?? null);
-    setMembers((membersRes.data ?? []) as OrgMember[]);
+    setMembers((membersRes.data ?? []) as unknown as OrgMember[]);
     setIsOwner(ownerRes.data === true);
     setLoading(false);
   }, [orgId]);

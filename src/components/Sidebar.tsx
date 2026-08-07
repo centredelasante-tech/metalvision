@@ -137,7 +137,8 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         .then(({ data }) => {
           if (!data) return;
           setMemberRole((data.org_role as string) ?? null);
-          const name = (data.organizations as { name: string } | null)?.name ?? null;
+          const orgsRel: any = (data as any).organizations ?? null;
+          const name: string | null = Array.isArray(orgsRel) ? orgsRel[0]?.name ?? null : orgsRel?.name ?? null;
           setCompanyName(name);
         });
       supabase

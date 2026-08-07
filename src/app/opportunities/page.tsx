@@ -580,7 +580,7 @@ function OpportunityDetailPanel({
       `)
       .eq('opportunity_id', opportunity.id)
       .order('created_at', { ascending: false });
-    setCapabilities((data as OppCapability[]) ?? []);
+    setCapabilities((data as unknown as OppCapability[]) ?? []);
     setLoadingCaps(false);
   }, [opportunity.id]);
 

@@ -149,9 +149,10 @@ export default function EvenementsPage() {
 
       if (data) {
         const orgs: Organization[] = data
-          .map((m: { organization_id: string; organizations: { id: string; name: string } | null }) =>
-            m.organizations ? { id: m.organizations.id, name: m.organizations.name } : null
-          )
+          .map((m: { organization_id: string; organizations: unknown }) => {
+            const orgRel: any = Array.isArray(m.organizations) ? m.organizations[0] : m.organizations;
+            return orgRel ? { id: orgRel.id, name: orgRel.name } : null;
+          })
           .filter(Boolean) as Organization[];
         setOrganizations(orgs);
         const map: Record<string, string> = {};
