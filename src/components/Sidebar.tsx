@@ -95,6 +95,15 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   // distribution applique elle-même sa propre vérification de rôle
   // (is_aggregator_admin() côté RLS) avant d'exposer quoi que ce soit.
   const [primaryAdminAggregatorId, setPrimaryAdminAggregatorId] = useState<string | null>(null);
+  // (#533) Un primary_admin de regroupement n'a délibérément AUCUNE ligne
+  // organization_members (il n'appartient à aucune organisation membre — cf.
+  // 02_organizations.sql du seed démo, qui ne rattache que les 3 admins
+  // d'organisation, jamais l'aggregateur). La requête organization_members
+  // ci-dessous ne renvoie donc jamais de ligne pour ce rôle, et
+  // companyName/memberRole restaient indéfiniment null : la carte de profil
+  // en bas du menu affichait "Chargement…" en permanence, comme si le
+  // chargement avait échoué. Ce nom de regroupement sert de repli explicite.
+  const [aggregatorName, setAggregatorName] = useState<string | null>(null);
 
   const dynamicClientNav: NavItem[] = primaryAdminAggregatorId
     ? [
@@ -133,7 +142,7 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         });
       supabase
         .from('aggregator_admins')
-        .select('aggregator_id')
+        .select('aggregator_id, aggregators(name)')
         .eq('user_id', user.id)
         .eq('role', 'primary_admin')
         .is('revoked_at', null)
@@ -141,6 +150,16 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
         .maybeSingle()
         .then(({ data }) => {
           setPrimaryAdminAggregatorId((data as { aggregator_id: string } | null)?.aggregator_id ?? null);
+          // Relation embarquée castée en `any` avant extraction : le typage
+          // généré par Supabase pour cette jointure est ambigu (tableau ou
+          // objet selon la résolution de la FK) — même contournement que la
+          // relation organizations(name) ci-dessus, qui produit la même
+          // erreur TS2352 si on tente un cast direct vers un objet unique.
+          const aggregatorsRel: any = (data as any)?.aggregators ?? null;
+          const aggName: string | null = Array.isArray(aggregatorsRel)
+            ? aggregatorsRel[0]?.name ?? null
+            : aggregatorsRel?.name ?? null;
+          setAggregatorName(aggName);
         });
     });
   }, [userRole]);
@@ -165,15 +184,21 @@ export default function Sidebar({ activeRoute, userRole }: SidebarProps) {
   };
 
   // Resolve display values
+  // (#533) companyName reste toujours null pour un primary_admin de
+  // regroupement (aucune ligne organization_members) — aggregatorName sert
+  // de repli explicite avant le "Chargement…" final, qui ne doit plus
+  // s'afficher indéfiniment que pour un vrai échec réseau/RLS.
   const displayName =
     userRole === 'admin' ?'Admin Récup.'
-      : userRole === 'verifier' ?'Vérificateur' : companyName ??'Chargement…';
+      : userRole === 'verifier' ?'Vérificateur' : companyName ?? aggregatorName ?? 'Chargement…';
 
   const displaySubtitle =
     userRole === 'admin' ?'Opérateur'
       : userRole === 'verifier' ?'ISO 14064-2'
       : memberRole
       ? (ROLE_LABELS[memberRole] ?? memberRole)
+      : aggregatorName
+      ? 'Admin regroupement'
       : '…';
 
   const avatarInitials =

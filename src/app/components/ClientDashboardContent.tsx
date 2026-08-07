@@ -44,7 +44,30 @@ export default function ClientDashboardContent() {
         .single()
         .then(({ data }) => {
           const name = (data?.organizations as { name: string } | null)?.name ?? null;
-          setCompanyName(name);
+          if (name) {
+            setCompanyName(name);
+            return;
+          }
+          // (#533) Un primary_admin de regroupement n'a aucune ligne
+          // organization_members (cf. Sidebar.tsx pour le détail) — la
+          // requête ci-dessus ne renvoie donc jamais de nom pour ce rôle.
+          // Repli explicite sur le nom du regroupement plutôt que de laisser
+          // le sous-titre du tableau de bord silencieusement amputé.
+          supabase
+            .from('aggregator_admins')
+            .select('aggregators(name)')
+            .eq('user_id', user.id)
+            .eq('role', 'primary_admin')
+            .is('revoked_at', null)
+            .limit(1)
+            .maybeSingle()
+            .then(({ data: aggData }) => {
+              const aggregatorsRel: any = (aggData as any)?.aggregators ?? null;
+              const aggName: string | null = Array.isArray(aggregatorsRel)
+                ? aggregatorsRel[0]?.name ?? null
+                : aggregatorsRel?.name ?? null;
+              setCompanyName(aggName);
+            });
         });
     });
   }, []);
