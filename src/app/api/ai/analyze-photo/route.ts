@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getChatCompletion } from '@/lib/ai/chatCompletion';
-import { createClient } from '../../../../lib/supabase/server';
+import { createClient } from '@/lib/supabase/server';
+import { getServerCompletion } from '@/lib/ai/llmClient.server';
+import { checkRateLimit, analyzePhotoRateLimitStore } from '@/lib/ai/rateLimit.server';
+import { toSafeErrorResponse, ValidationError, UnauthorizedError, RateLimitedError } from '@/lib/ai/safeError';
+
+// GATE IA-1 — durcissement (voir Agent-Aide-MetalTrace-V1-Architecture.md §1) :
+//  - authentification obligatoire (auth.getUser()) avant tout appel LLM payant ;
+//  - client_id dérivé exclusivement de la session authentifiée, jamais du formData ;
+//  - validation stricte de l'entrée (taille/type d'image, bornes numériques) ;
+//  - rate limiting par utilisateur ;
+//  - appel LLM via le module server-only (plus de proxy HTTP interne).
+
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 Mo
+const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const RATE_LIMIT = 10; // requêtes
+const RATE_WINDOW_MS = 60_000; // par minute
 
 const METAL_DENSITIES: Record<string, number> = {
   aluminium: 2700,
@@ -33,29 +47,56 @@ function normalizeMetal(raw: string): string {
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Authentification obligatoire — avant toute lecture du corps et
+    //    avant tout appel au fournisseur LLM (évite la consommation de
+    //    clé API par un appelant non authentifié).
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError || !user) {
+      throw new UnauthorizedError();
+    }
+
+    // 2. Rate limiting par utilisateur authentifié.
+    const rl = checkRateLimit(analyzePhotoRateLimitStore, `user:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS, Date.now());
+    if (!rl.allowed) {
+      throw new RateLimitedError(rl.retryAfterMs);
+    }
+
+    // 3. Lecture et validation stricte de l'entrée.
     const formData = await req.formData();
     const imageFile = formData.get('image') as File | null;
     const referenceSizeCm = parseFloat(formData.get('reference_size_cm') as string);
     const metalPricePerKg = parseFloat(formData.get('metal_price_per_kg') as string);
     const densityOverrideRaw = formData.get('density_override');
     const densityOverride = densityOverrideRaw ? parseFloat(densityOverrideRaw as string) : null;
-    const clientId = formData.get('client_id') as string | null;
+    // client_id n'est jamais lu depuis formData — dérivé exclusivement de la session (étape 6).
 
     if (!imageFile) {
-      return NextResponse.json({ error: 'Image file is required' }, { status: 400 });
+      throw new ValidationError('Image requise.');
     }
-    if (isNaN(referenceSizeCm) || referenceSizeCm <= 0) {
-      return NextResponse.json({ error: 'reference_size_cm must be a positive number' }, { status: 400 });
+    if (!ALLOWED_MIME_TYPES.has(imageFile.type)) {
+      throw new ValidationError('Type d\'image non supporté (jpeg, png, webp uniquement).');
     }
-    if (isNaN(metalPricePerKg) || metalPricePerKg < 0) {
-      return NextResponse.json({ error: 'metal_price_per_kg must be a non-negative number' }, { status: 400 });
+    if (imageFile.size > MAX_IMAGE_BYTES) {
+      throw new ValidationError('Image trop volumineuse (8 Mo maximum).');
+    }
+    if (isNaN(referenceSizeCm) || referenceSizeCm <= 0 || referenceSizeCm > 1000) {
+      throw new ValidationError('reference_size_cm doit être un nombre positif raisonnable.');
+    }
+    if (isNaN(metalPricePerKg) || metalPricePerKg < 0 || metalPricePerKg > 100000) {
+      throw new ValidationError('metal_price_per_kg doit être un nombre non négatif raisonnable.');
+    }
+    if (densityOverride !== null && (isNaN(densityOverride) || densityOverride <= 0 || densityOverride > 30000)) {
+      throw new ValidationError('density_override doit être un nombre positif raisonnable.');
     }
 
     // Convert image to base64 data URI
     const arrayBuffer = await imageFile.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString('base64');
-    const mimeType = imageFile.type || 'image/jpeg';
-    const base64DataUri = `data:${mimeType};base64,${base64}`;
+    const base64DataUri = `data:${imageFile.type};base64,${base64}`;
 
     const systemPrompt = `Tu es un expert en analyse visuelle industrielle spécialisé dans les métaux recyclés.
 
@@ -131,10 +172,10 @@ Prix du marché : ${metalPricePerKg} $/kg.${densityOverride ? `\nDensité impos�
 
 Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
 
-    const aiResponse = await getChatCompletion(
-      'GEMINI',
-      'gemini/gemini-2.5-flash',
-      [
+    const aiResponse = await getServerCompletion({
+      provider: 'GEMINI',
+      model: 'gemini/gemini-2.5-flash',
+      messages: [
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
@@ -144,18 +185,17 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
           ],
         },
       ],
-      { temperature: 0.2, max_tokens: 4096 }
-    );
+      maxTokens: 4096,
+      temperature: 0.2,
+    });
 
     const rawContent = aiResponse?.choices?.[0]?.message?.content ?? '';
 
-    // Strip all possible markdown artifacts
     let jsonStr = rawContent
       .replace(/^`+(?:json)?\s*/i, '')
       .replace(/\s*`+$/, '')
       .trim();
 
-    // If the string starts with { or [, extract just the JSON object
     const jsonStart = jsonStr.indexOf('{');
     const jsonEnd = jsonStr.lastIndexOf('}');
     if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
@@ -180,32 +220,19 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
     try {
       parsed = JSON.parse(jsonStr);
     } catch {
-      return NextResponse.json(
-        { error: 'Failed to parse AI response', details: rawContent },
-        { status: 500 }
-      );
+      // Ne jamais renvoyer le contenu brut du modèle au client (peut refléter un prompt-injection tenté).
+      return NextResponse.json({ error: 'Analyse IA invalide.', code: 'llm_parse_error' }, { status: 502 });
     }
 
     const metalType = normalizeMetal(parsed.metal_type);
     const widthCm = Math.max(0, parsed.width_cm ?? 0);
     const heightCm = Math.max(0, parsed.height_cm ?? 0);
     const depthCm = Math.max(0, parsed.depth_cm ?? 0);
-
-    // Volume in m³ with compaction coefficient 0.65
     const volumeM3 = parsed.volume_m3 ?? ((widthCm / 100) * (depthCm / 100) * (heightCm / 100) * 0.65);
-
-    // Density in kg/m³
     const density = densityOverride ?? METAL_DENSITIES[metalType] ?? 5000;
-
-    // Weight in kg
     const weightKg = parsed.weight_kg ?? (volumeM3 * density);
-
-    // Estimated value
     const estimatedValue = parsed.estimated_value ?? (weightKg * metalPricePerKg);
-
-    // Confidence: 0-1
     const confidence = Math.min(1, Math.max(0, parsed.confidence ?? 0));
-
     const compactionVisual = Math.min(1, Math.max(0, parsed.compaction_visual ?? 0.65));
     const purityVisual = Math.min(1, Math.max(0, parsed.purity_visual ?? 0.5));
     const objectType = parsed.object_type ?? null;
@@ -225,38 +252,38 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
       explanation: parsed.explanation ?? '',
     };
 
-    // Store in raw_measurements if client_id is provided
+    // 6. client_id dérivé de la session authentifiée — jamais d'une valeur fournie par le client.
+    //    L'écriture passe par le client Supabase authentifié : la policy RLS
+    //    "clients_manage_own_raw_measurements" (client_id = auth.uid()) s'applique
+    //    même si ce garde applicatif était contourné.
     let measurementId: string | null = null;
-    if (clientId) {
-      try {
-        const supabase = await createClient();
-        const { data: insertedRow, error: dbError } = await supabase
-          .from('raw_measurements')
-          .insert({
-            client_id: clientId,
-            metal_type_predicted: result.metal_type,
-            confidence: result.confidence,
-            width_cm: result.width_cm,
-            height_cm: result.height_cm,
-            depth_cm: result.depth_cm,
-            volume_estimated_m3: result.volume_m3,
-            compaction_visual: result.compaction_visual,
-            purity_visual: result.purity_visual,
-            object_type: result.object_type,
-            raw_analysis_json: parsed,
-            reference_size_cm: referenceSizeCm,
-            metal_price_per_kg: metalPricePerKg,
-            density_override: densityOverride,
-          })
-          .select('id')
-          .single();
+    try {
+      const { data: insertedRow, error: dbError } = await supabase
+        .from('raw_measurements')
+        .insert({
+          client_id: user.id,
+          metal_type_predicted: result.metal_type,
+          confidence: result.confidence,
+          width_cm: result.width_cm,
+          height_cm: result.height_cm,
+          depth_cm: result.depth_cm,
+          volume_estimated_m3: result.volume_m3,
+          compaction_visual: result.compaction_visual,
+          purity_visual: result.purity_visual,
+          object_type: result.object_type,
+          raw_analysis_json: parsed,
+          reference_size_cm: referenceSizeCm,
+          metal_price_per_kg: metalPricePerKg,
+          density_override: densityOverride,
+        })
+        .select('id')
+        .single();
 
-        if (!dbError && insertedRow) {
-          measurementId = insertedRow.id;
-        }
-      } catch {
-        // DB storage failure is non-blocking — analysis result is still returned
+      if (!dbError && insertedRow) {
+        measurementId = insertedRow.id;
       }
+    } catch {
+      // Échec d'écriture non bloquant — le résultat d'analyse est tout de même renvoyé.
     }
 
     return NextResponse.json({
@@ -264,7 +291,10 @@ Effectue l'analyse complète et retourne uniquement le JSON demandé.`;
       measurement_id: measurementId,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const { status, body } = toSafeErrorResponse(err, 'analyze-photo');
+    if (err instanceof RateLimitedError) {
+      return NextResponse.json(body, { status, headers: { 'Retry-After': String(Math.ceil(err.retryAfterMs / 1000)) } });
+    }
+    return NextResponse.json(body, { status });
   }
 }
