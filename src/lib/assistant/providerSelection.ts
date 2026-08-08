@@ -7,7 +7,7 @@ import { isProviderConfigured } from '@/lib/ai/llmClient.server';
  * pour limiter la surface (pas de sélection dynamique exposée).
  */
 const PROVIDER_PRIORITY: Array<{ provider: LLMProvider; model: string }> = [
-  { provider: 'ANTHROPIC', model: 'anthropic/claude-3-5-haiku-20241022' },
+  { provider: 'ANTHROPIC', model: 'anthropic/claude-haiku-4-5-20251001' },
   { provider: 'OPEN_AI', model: 'openai/gpt-4o-mini' },
   { provider: 'GEMINI', model: 'gemini/gemini-2.5-flash' },
 ];
