@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getServerCompletion } from '@/lib/ai/llmClient.server';
+import { getServerCompletion, LLMUpstreamError } from '@/lib/ai/llmClient.server';
 import { checkRateLimit, assistantAskRateLimitStore } from '@/lib/ai/rateLimit.server';
 import { toSafeErrorResponse, ValidationError, UnauthorizedError, RateLimitedError } from '@/lib/ai/safeError';
 import { isCarbonScreen, isValidObjectId, type CarbonScreen } from '@/lib/assistant/screens';
@@ -14,14 +14,19 @@ import { getPortalRole, PortalRoleError } from '@/lib/auth/getPortalRole';
 //
 // Garde-fous structurels (voir Agent-Aide-MetalTrace-V1-Architecture.md) :
 //  1. auth.getUser() obligatoire — 401 sinon, avant toute autre opération.
-//  2. Rate limit par utilisateur — 429 si dépassé.
+//  2. Rate limit par utilisateur — 429 si dépassé. ⚠️ Mécanisme en mémoire,
+//     provisoire pour développement/Preview uniquement — NON SUFFISANT pour
+//     la production serverless (voir src/lib/ai/rateLimit.server.ts). Ne pas
+//     présenter ce point comme clôturant le risque d'abus en production.
 //  3. `screen` validé contre une allowlist fixe (8 écrans carbone) — 400 sinon.
 //  4. Contexte résolu exclusivement via CONTEXT_RESOLVERS (lectures fixes,
 //     client Supabase authentifié = RLS active) — jamais de SQL du modèle.
 //  5. Aucun function-calling/tool exposé au modèle — aucune capacité d'écriture.
 //  6. Prompt système figé, non modifiable par l'utilisateur (voir systemPrompt.ts).
 //  7. Erreurs toujours sanitisées (toSafeErrorResponse) — jamais de fuite de secret.
-//  8. Journalisation minimisant les données sensibles (voir auditLog.ts).
+//  8. Journalisation minimisant les données sensibles (voir auditLog.ts et
+//     supabase/carbon_migrations_proposed/15_assistant_interactions_audit_log.sql —
+//     migration PROPOSÉE, NON appliquée).
 
 const MAX_ANSWER_TOKENS = 800;
 
@@ -108,30 +113,59 @@ export async function POST(req: NextRequest) {
     const systemPrompt = buildSystemPrompt(screen);
     const userMessage = buildUserMessage(question, context);
 
-    const completion = await getServerCompletion({
-      provider: provider.provider,
-      model: provider.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      maxTokens: MAX_ANSWER_TOKENS,
-      temperature: 0.2,
-    });
+    let completion;
+    try {
+      completion = await getServerCompletion({
+        provider: provider.provider,
+        model: provider.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        maxTokens: MAX_ANSWER_TOKENS,
+        temperature: 0.2,
+      });
+    } catch (llmErr) {
+      // Échec de l'appel LLM après authentification : journalisé comme
+      // interaction en échec (statut='error', jamais le message brut), pour
+      // que l'audit reste complet même quand la réponse finale est une erreur.
+      const errorCode = llmErr instanceof LLMUpstreamError ? 'llm_upstream_error' : 'llm_configuration_error';
+      await logAssistantInteraction(supabase, user.id, {
+        portalRole,
+        screen,
+        objectId: objectId ?? null,
+        questionLength: question.length,
+        contextSummary: context,
+        answerLength: 0,
+        model: provider.model,
+        promptTokens: null,
+        completionTokens: null,
+        latencyMs: Date.now() - startedAt,
+        status: 'error',
+        errorCode,
+      });
+      throw llmErr;
+    }
 
     const answer = completion?.choices?.[0]?.message?.content ?? '';
     const answerText = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
-    // 8. Journalisation (best-effort, ne bloque jamais la réponse).
+    // 8. Journalisation (best-effort, ne bloque jamais la réponse). Ne stocke
+    //    jamais la question/réponse complètes ni le contenu du contexte —
+    //    voir auditLog.ts pour le détail exact des champs conservés.
     await logAssistantInteraction(supabase, user.id, {
       portalRole,
       screen,
-      objectIdProvided: Boolean(objectId),
+      objectId: objectId ?? null,
       questionLength: question.length,
       contextSummary: context,
       answerLength: answerText.length,
       model: provider.model,
+      promptTokens: completion?.usage?.prompt_tokens ?? null,
+      completionTokens: completion?.usage?.completion_tokens ?? null,
       latencyMs: Date.now() - startedAt,
+      status: 'success',
+      errorCode: null,
     });
 
     return NextResponse.json({ screen, answer: answerText });

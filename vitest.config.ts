@@ -4,17 +4,25 @@ import path from 'node:path';
 /**
  * Config vitest — GATE IA-1.
  *
- * Portée volontairement limitée à `src/tests/assistant-ask.test.ts` : le
- * dépôt contient déjà `src/tests/mrv.test.ts`, écrit contre `@jest/globals`
- * (aucun binaire/config jest présent — boilerplate non exécutable, constaté
- * indépendamment de cette passe). Le faire tourner sous vitest échouerait
- * pour une raison sans rapport avec GATE IA-1. Ne pas élargir `include` sans
- * traiter ce fichier séparément.
+ * Ne restreint PAS le périmètre de collecte des tests : `main` ne définissait
+ * aucun `include`/runner de tests avant cette branche (aucun `vitest.config.ts`,
+ * aucun script `test` dans package.json). Une version précédente de ce fichier
+ * limitait `include` à `src/tests/assistant-ask.test.ts`, ce qui aurait
+ * silencieusement exclu `src/tests/mrv.test.ts` de toute exécution future de
+ * `npm test` / `vitest run` sans le dire — corrigé ici.
+ *
+ * `src/tests/mrv.test.ts` (préexistant, hors périmètre GATE IA-1) est écrit
+ * contre `@jest/globals` sans jest installé/configuré dans ce dépôt — il
+ * échouera sous vitest pour une raison sans rapport avec cette passe. C'est
+ * visible tel quel dans `vitest run` (pas masqué), et non corrigé ici.
+ *
+ * Pour lancer uniquement les tests de l'Agent d'aide sans toucher au
+ * périmètre général : `npx vitest run src/tests/assistant-ask.test.ts`
+ * (chemin explicite en argument, pas via `include`).
  */
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/tests/assistant-ask.test.ts'],
   },
   resolve: {
     alias: {
