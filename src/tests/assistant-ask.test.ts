@@ -46,20 +46,40 @@ vi.mock('@/lib/ai/llmClient.server', async () => {
 
 // Import APRÈS les vi.mock (hoisted par vitest, mais on garde l'ordre lisible).
 const { POST } = await import('@/app/api/assistant/ask/route');
-const { assistantAskRateLimitStore } = await import('@/lib/ai/rateLimit.server');
 
 // ---- Fake Supabase client ---------------------------------------------------
+
+interface FakeRateLimitRow {
+  allowed: boolean;
+  scope: string;
+  limit_kind: 'minute' | 'day' | null;
+  retry_after_seconds: number | null;
+  remaining_minute: number;
+  remaining_day: number;
+}
+
+const DEFAULT_RATE_LIMIT_ALLOWED: FakeRateLimitRow = {
+  allowed: true,
+  scope: 'assistant',
+  limit_kind: null,
+  retry_after_seconds: null,
+  remaining_minute: 19,
+  remaining_day: 199,
+};
 
 interface FakeSupabaseOptions {
   user: { id: string } | null;
   portalRole?: string | null;
   /** Résultat renvoyé par toute requête `.from(...)` (liste ou singleton). */
   fromResult?: { data: unknown; error: { message: string } | null };
+  /** Résultat simulé de la RPC distribuée check_ai_rate_limit (GATE IA-3). */
+  rateLimitResult?: FakeRateLimitRow;
   rpcSpy?: (fnName: string) => void;
 }
 
 function makeFakeSupabase(opts: FakeSupabaseOptions) {
   const fromResult = opts.fromResult ?? { data: [], error: null };
+  const rateLimitResult = opts.rateLimitResult ?? DEFAULT_RATE_LIMIT_ALLOWED;
 
   function builder() {
     const b: Record<string, unknown> = {};
@@ -86,10 +106,14 @@ function makeFakeSupabase(opts: FakeSupabaseOptions) {
     },
     rpc: (fnName: string) => {
       opts.rpcSpy?.(fnName);
-      const result =
-        fnName === 'get_my_portal_role'
-          ? { data: opts.portalRole ?? 'client', error: null }
-          : { data: null, error: { message: `unexpected rpc ${fnName}` } };
+      let result: { data: unknown; error: { message: string } | null };
+      if (fnName === 'get_my_portal_role') {
+        result = { data: opts.portalRole ?? 'client', error: null };
+      } else if (fnName === 'check_ai_rate_limit') {
+        result = { data: rateLimitResult, error: null };
+      } else {
+        result = { data: null, error: { message: `unexpected rpc ${fnName}` } };
+      }
       return { then: (resolve: (v: unknown) => void) => resolve(result) };
     },
     from: () => builder(),
@@ -111,7 +135,6 @@ function freshUserId(): string {
 }
 
 beforeEach(() => {
-  assistantAskRateLimitStore.clear();
   mockGetServerCompletion.mockReset();
   mockGetServerCompletion.mockResolvedValue({
     choices: [{ message: { content: 'Réponse simulée.' } }],
@@ -254,10 +277,13 @@ describe('POST /api/assistant/ask — demande de mutation', () => {
     );
 
     expect(res.status).toBe(200);
-    // La seule RPC jamais appelée par ce endpoint est la résolution de rôle en
-    // lecture seule — aucune RPC de mutation (confirm_credit_sale,
-    // approve_distribution_rule_proposal, etc.) n'existe dans ce chemin de code.
-    expect(rpcCalls).toEqual(['get_my_portal_role']);
+    // Les seules RPC jamais appelées par ce endpoint sont la vérification du
+    // rate limit distribué et la résolution de rôle, toutes deux en lecture
+    // seule côté métier (check_ai_rate_limit n'écrit que dans sa propre
+    // table de compteurs, jamais dans une table métier) — aucune RPC de
+    // mutation (confirm_credit_sale, approve_distribution_rule_proposal,
+    // etc.) n'existe dans ce chemin de code.
+    expect(rpcCalls).toEqual(['check_ai_rate_limit', 'get_my_portal_role']);
 
     const callArgs = mockGetServerCompletion.mock.calls[0][0];
     expect(callArgs).not.toHaveProperty('tools');
@@ -265,23 +291,69 @@ describe('POST /api/assistant/ask — demande de mutation', () => {
 });
 
 // ---- 7. Dépassement de rate limit ------------------------------------------
+//
+// Le mécanisme de comptage/seuil lui-même vit désormais côté Postgres
+// (GATE IA-3, table ai_rate_limit_counters + fonction check_ai_rate_limit —
+// voir supabase/carbon_migrations_proposed/17_ai_distributed_rate_limit.sql
+// et ses tests SQL dédiés pour la preuve du seuil exact et de la
+// concurrence). Ce test unitaire vérifie uniquement que l'ENDPOINT relaie
+// correctement le verdict de la RPC : refus -> 429 + Retry-After ; aucun
+// appel LLM déclenché.
 
 describe('POST /api/assistant/ask — rate limiting', () => {
-  test('la 21e requête en une minute pour le même utilisateur est rejetée (429)', async () => {
+  test('verdict "allowed: false" de la RPC distribuée -> 429 avec Retry-After, aucun appel LLM', async () => {
     const user = { id: freshUserId() };
-    mockSupabaseFactory.mockReturnValue(makeFakeSupabase({ user, fromResult: { data: [], error: null } }));
+    mockSupabaseFactory.mockReturnValue(
+      makeFakeSupabase({
+        user,
+        fromResult: { data: [], error: null },
+        rateLimitResult: {
+          allowed: false,
+          scope: 'assistant',
+          limit_kind: 'minute',
+          retry_after_seconds: 37,
+          remaining_minute: 0,
+          remaining_day: 150,
+        },
+      })
+    );
 
-    let lastRes;
-    for (let i = 0; i < 21; i++) {
-      lastRes = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: `Question ${i}` }));
-    }
+    const res = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: 'Bonjour ?' }));
 
-    expect(lastRes!.status).toBe(429);
-    const body = await lastRes!.json();
+    expect(res.status).toBe(429);
+    const body = await res.json();
     expect(body.code).toBe('rate_limited');
-    expect(lastRes!.headers.get('Retry-After')).toBeTruthy();
+    expect(res.headers.get('Retry-After')).toBe('37');
+    expect(mockGetServerCompletion).not.toHaveBeenCalled();
+  });
+
+  test('verdict "allowed: true" -> la requête est traitée normalement (200)', async () => {
+    const user = { id: freshUserId() };
+    mockSupabaseFactory.mockReturnValue(
+      makeFakeSupabase({
+        user,
+        fromResult: { data: [], error: null },
+        rateLimitResult: { ...DEFAULT_RATE_LIMIT_ALLOWED_FOR_TEST() },
+      })
+    );
+
+    const res = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: 'Bonjour ?' }));
+
+    expect(res.status).toBe(200);
+    expect(mockGetServerCompletion).toHaveBeenCalledTimes(1);
   });
 });
+
+function DEFAULT_RATE_LIMIT_ALLOWED_FOR_TEST(): FakeRateLimitRow {
+  return {
+    allowed: true,
+    scope: 'assistant',
+    limit_kind: null,
+    retry_after_seconds: null,
+    remaining_minute: 19,
+    remaining_day: 199,
+  };
+}
 
 // ---- Validation générale (allowlist d'écrans) ------------------------------
 

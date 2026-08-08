@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getServerCompletion } from '@/lib/ai/llmClient.server';
-import { checkRateLimit, analyzePhotoRateLimitStore } from '@/lib/ai/rateLimit.server';
+import { checkDistributedRateLimit } from '@/lib/ai/distributedRateLimit.server';
 import { toSafeErrorResponse, ValidationError, UnauthorizedError, RateLimitedError } from '@/lib/ai/safeError';
 
 // GATE IA-1 — durcissement (voir Agent-Aide-MetalTrace-V1-Architecture.md §1) :
 //  - authentification obligatoire (auth.getUser()) avant tout appel LLM payant ;
 //  - client_id dérivé exclusivement de la session authentifiée, jamais du formData ;
 //  - validation stricte de l'entrée (taille/type d'image, bornes numériques) ;
-//  - rate limiting par utilisateur ;
+//  - rate limiting distribué par utilisateur (GATE IA-3, scope 'analyze_photo' —
+//    voir supabase/carbon_migrations_proposed/17_ai_distributed_rate_limit.sql) ;
 //  - appel LLM via le module server-only (plus de proxy HTTP interne).
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 Mo
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const RATE_LIMIT = 10; // requêtes
-const RATE_WINDOW_MS = 60_000; // par minute
 
 const METAL_DENSITIES: Record<string, number> = {
   aluminium: 2700,
@@ -59,8 +58,8 @@ export async function POST(req: NextRequest) {
       throw new UnauthorizedError();
     }
 
-    // 2. Rate limiting par utilisateur authentifié.
-    const rl = checkRateLimit(analyzePhotoRateLimitStore, `user:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS, Date.now());
+    // 2. Rate limiting distribué par utilisateur authentifié (Postgres, GATE IA-3).
+    const rl = await checkDistributedRateLimit(supabase, 'analyze_photo');
     if (!rl.allowed) {
       throw new RateLimitedError(rl.retryAfterMs);
     }

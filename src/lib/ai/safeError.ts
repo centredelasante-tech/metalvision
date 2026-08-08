@@ -1,5 +1,6 @@
 import 'server-only';
 import { LLMConfigurationError, LLMUpstreamError } from './llmClient.server';
+import { RateLimitCheckError } from './distributedRateLimit.server';
 
 /**
  * Traduit une erreur interne en réponse HTTP sûre : jamais de clé API, de
@@ -30,6 +31,12 @@ export function toSafeErrorResponse(error: unknown, context: string): SafeErrorR
   }
   if (error instanceof RateLimitedError) {
     return { status: 429, body: { error: 'Trop de requêtes. Veuillez réessayer dans un instant.', code: 'rate_limited' } };
+  }
+  if (error instanceof RateLimitCheckError) {
+    // Fail closed : la vérification du rate limit elle-même a échoué (voir
+    // distributedRateLimit.server.ts) — on refuse plutôt que de laisser
+    // passer un volume non borné.
+    return { status: 503, body: { error: 'Service momentanément indisponible.', code: 'rate_limit_check_failed' } };
   }
 
   return { status: 500, body: { error: 'Une erreur interne est survenue.', code: 'internal_error' } };

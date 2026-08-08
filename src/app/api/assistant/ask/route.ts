@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getServerCompletion, LLMUpstreamError } from '@/lib/ai/llmClient.server';
-import { checkRateLimit, assistantAskRateLimitStore } from '@/lib/ai/rateLimit.server';
+import { checkDistributedRateLimit } from '@/lib/ai/distributedRateLimit.server';
 import { toSafeErrorResponse, ValidationError, UnauthorizedError, RateLimitedError } from '@/lib/ai/safeError';
 import { isCarbonScreen, isValidObjectId, type CarbonScreen } from '@/lib/assistant/screens';
 import { CONTEXT_RESOLVERS } from '@/lib/assistant/contextResolvers';
@@ -14,10 +14,12 @@ import { getPortalRole, PortalRoleError } from '@/lib/auth/getPortalRole';
 //
 // Garde-fous structurels (voir Agent-Aide-MetalTrace-V1-Architecture.md) :
 //  1. auth.getUser() obligatoire — 401 sinon, avant toute autre opération.
-//  2. Rate limit par utilisateur — 429 si dépassé. ⚠️ Mécanisme en mémoire,
-//     provisoire pour développement/Preview uniquement — NON SUFFISANT pour
-//     la production serverless (voir src/lib/ai/rateLimit.server.ts). Ne pas
-//     présenter ce point comme clôturant le risque d'abus en production.
+//  2. Rate limit par utilisateur — 429 si dépassé. Mécanisme distribué,
+//     persistant et atomique en base Postgres (GATE IA-3 — voir
+//     supabase/carbon_migrations_proposed/17_ai_distributed_rate_limit.sql
+//     et src/lib/ai/distributedRateLimit.server.ts). Identité dérivée
+//     exclusivement de auth.uid() côté DB, jamais d'un user_id fourni par
+//     le client.
 //  3. `screen` validé contre une allowlist fixe (8 écrans carbone) — 400 sinon.
 //  4. Contexte résolu exclusivement via CONTEXT_RESOLVERS (lectures fixes,
 //     client Supabase authentifié = RLS active) — jamais de SQL du modèle.
@@ -49,8 +51,8 @@ export async function POST(req: NextRequest) {
       throw new UnauthorizedError();
     }
 
-    // 2. Rate limiting par utilisateur.
-    const rl = checkRateLimit(assistantAskRateLimitStore, `user:${user.id}`, 20, 60_000, Date.now());
+    // 2. Rate limiting distribué par utilisateur (Postgres, GATE IA-3).
+    const rl = await checkDistributedRateLimit(supabase, 'assistant');
     if (!rl.allowed) {
       throw new RateLimitedError(rl.retryAfterMs);
     }
