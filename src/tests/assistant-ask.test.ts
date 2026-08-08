@@ -18,7 +18,7 @@
  * Supabase/RLS renvoie (y compris le cas "rien", qui est la réponse réelle
  * de RLS à un accès hors périmètre), pas RLS lui-même.
  */
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 // ---- Mocks ----------------------------------------------------------------
@@ -134,6 +134,8 @@ function freshUserId(): string {
   return `00000000-0000-4000-8000-${String(userCounter).padStart(12, '0')}`;
 }
 
+const SAVED_AI_LLM_PROVIDER = process.env.AI_LLM_PROVIDER;
+
 beforeEach(() => {
   mockGetServerCompletion.mockReset();
   mockGetServerCompletion.mockResolvedValue({
@@ -141,6 +143,18 @@ beforeEach(() => {
   });
   mockIsProviderConfigured.mockReset();
   mockIsProviderConfigured.mockReturnValue(true);
+  // GATE D0 : le provider n'est plus choisi par un ordre de priorité implicite
+  // mais exclusivement par AI_LLM_PROVIDER (lu en clair par providerSelection.ts,
+  // non mocké ici). Les scénarios de ce fichier portent sur l'authentification,
+  // le RLS, l'injection, le rate limiting — pas sur la sélection de provider
+  // elle-même (couverte par providerSelection.test.ts) — donc on fixe une
+  // valeur valide par défaut pour ne pas les faire échouer sur ce point.
+  process.env.AI_LLM_PROVIDER = 'anthropic';
+});
+
+afterEach(() => {
+  if (SAVED_AI_LLM_PROVIDER === undefined) delete process.env.AI_LLM_PROVIDER;
+  else process.env.AI_LLM_PROVIDER = SAVED_AI_LLM_PROVIDER;
 });
 
 // ---- 1. Utilisateur non authentifié ----------------------------------------
@@ -367,14 +381,50 @@ describe('POST /api/assistant/ask — validation d\'entrée', () => {
     expect(mockGetServerCompletion).not.toHaveBeenCalled();
   });
 
-  test('provider LLM non configuré -> 503, pas de crash', async () => {
+  test('provider explicitement sélectionné (AI_LLM_PROVIDER) mais clé indisponible -> 503, pas de crash, aucun appel LLM', async () => {
     mockSupabaseFactory.mockReturnValue(
       makeFakeSupabase({ user: { id: freshUserId() }, fromResult: { data: [], error: null } })
     );
+    // AI_LLM_PROVIDER='anthropic' (fixé en beforeEach) mais sa clé n'est pas configurée.
     mockIsProviderConfigured.mockReturnValue(false);
 
     const res = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: 'Bonjour ?' }));
 
     expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('llm_not_configured');
+    expect(mockGetServerCompletion).not.toHaveBeenCalled();
+  });
+
+  test('GATE D0 : AI_LLM_PROVIDER absent -> 503 llm_not_configured, aucun appel LLM (bout en bout via la route)', async () => {
+    mockSupabaseFactory.mockReturnValue(
+      makeFakeSupabase({ user: { id: freshUserId() }, fromResult: { data: [], error: null } })
+    );
+    delete process.env.AI_LLM_PROVIDER;
+    // Même si le provider serait "configuré" au sens clé API présente, l'absence
+    // de la variable explicite doit à elle seule empêcher toute sélection.
+    mockIsProviderConfigured.mockReturnValue(true);
+
+    const res = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: 'Bonjour ?' }));
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('llm_not_configured');
+    expect(mockGetServerCompletion).not.toHaveBeenCalled();
+  });
+
+  test('GATE D0 : AI_LLM_PROVIDER=valeur invalide -> 503 llm_not_configured, aucun appel LLM', async () => {
+    mockSupabaseFactory.mockReturnValue(
+      makeFakeSupabase({ user: { id: freshUserId() }, fromResult: { data: [], error: null } })
+    );
+    process.env.AI_LLM_PROVIDER = 'mistral';
+    mockIsProviderConfigured.mockReturnValue(true);
+
+    const res = await POST(makeRequest({ screen: 'admin-carbon-inventory', question: 'Bonjour ?' }));
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('llm_not_configured');
+    expect(mockGetServerCompletion).not.toHaveBeenCalled();
   });
 });
