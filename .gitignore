@@ -22,6 +22,15 @@ Thumbs.db
 # Vercel deployment
 .vercel/
 
+# Environment variables (secrets — jamais suivis par Git ; voir .env.example
+# pour la liste des noms attendus). GATE SEC-1.
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
 # Supabase CLI local cache (project-ref, pooler info — spécifique à la machine)
 supabase/.temp/
 
